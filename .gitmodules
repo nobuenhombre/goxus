@@ -1,0 +1,6 @@
+[submodule "back"]
+	path = back
+	url = git@github.com:nobuenhombre/goxus.back.git
+[submodule "front"]
+	path = front
+	url = git@github.com:nobuenhombre/goxus.front.git
