@@ -161,3 +161,75 @@ git pull --recurse-submodules             # pull everything
 ## CI/CD Note
 
 Each submodule has its own CI (GitHub Actions). The orchestrator has no CI — it's just a container for submodule pointers and documentation.
+
+---
+
+## Real-World Example: Changing `.gitignore` in `front`
+
+This example shows the exact steps from a real session. The user has **two clones** of the front repo:
+
+| Clone | Path | Purpose |
+|-------|------|---------|
+| Standalone | `~/Sources/golang.app/goxus.front/` | A separate clone for independent work |
+| Submodule | `goxus/front/` | The submodule inside the orchestrator |
+
+Both point to the same remote: `github.com/nobuenhombre/goxus.front.git`
+
+### What happened
+
+User added `.idea` to `front/.gitignore` in the standalone clone.
+
+### Step-by-step
+
+**Step 1 — Check what changed in the standalone repo**
+
+```bash
+cd ~/Sources/golang.app/goxus.front
+git diff
+```
+
+Shows:
+```diff
++.idea
++```
+
+**Step 2 — Commit and push from the standalone repo**
+
+```bash
+git add .gitignore
+git commit -m "chore: add .idea to .gitignore"
+git push
+```
+
+> **Gotcha:** If the standalone clone is behind the remote (because the submodule was pushed earlier), push will be rejected:
+> ```
+> ! [rejected] main -> main (fetch first)
+> ```
+>
+> Fix: pull with rebase first, then push:
+> ```bash
+> git pull --rebase origin main
+> git push
+> ```
+
+**Step 3 — Pull the new commit into the submodule**
+
+```bash
+cd /path/to/goxus/front
+git pull origin main
+```
+
+**Step 4 — Update the orchestrator pointer**
+
+```bash
+cd /path/to/goxus
+git add front
+git commit -m "chore(front): update submodule — .gitignore now excludes .idea"
+git push
+```
+
+### Key takeaways
+
+1. **Commit in the submodule's own repo first** — whether it's the submodule clone (`goxus/front/`) or a standalone clone (`~/.../goxus.front/`). Push to GitHub.
+2. **Make sure the submodule clone has the latest commit** — `git pull` inside `goxus/front/`.
+3. **Update the orchestrator pointer** — `git add front` in `goxus/` to stage the new commit hash, then commit and push.
