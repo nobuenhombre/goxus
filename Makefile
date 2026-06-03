@@ -1,0 +1,106 @@
+# Goxus — orchestrator Makefile
+# ===============================
+# Запуск backend и frontend из корня монорепозитория
+
+BACK_DIR  := back
+FRONT_DIR := front
+
+BACK_PORT := 8080
+FRONT_PORT := 3000
+
+BACK_CMD  := cd $(BACK_DIR) && go run ./src/cmd/goxus/... -runtype=service -config=configs/local/config.yaml
+FRONT_CMD := cd $(FRONT_DIR) && npm run dev
+
+CHROME    := /usr/bin/google-chrome-stable
+FRONT_URL := http://localhost:$(FRONT_PORT)
+BACK_URL  := http://localhost:$(BACK_PORT)
+
+# PostgreSQL
+PG_PORT := 5432
+PG_HOST := 127.0.0.1
+
+.PHONY: help check-postgres run-back run-front dev dev-bg stop open
+
+help:
+	@echo "Доступные команды:"
+	@echo "  make check-postgres — проверить/запустить PostgreSQL"
+	@echo "  make run-back       — запустить backend (Go) в текущем терминале"
+	@echo "  make run-front      — запустить frontend (Next.js) в текущем терминале"
+	@echo "  make dev            — запустить PostgreSQL + backend + frontend + открыть Chrome"
+	@echo "  make dev-bg         — запустить PostgreSQL + backend + frontend в фоне (без браузера)"
+	@echo "  make stop           — остановить фоновые процессы backend и frontend"
+	@echo "  make open           — открыть frontend в Chrome"
+	@echo ""
+	@echo "Порты: backend=$(BACK_PORT), frontend=$(FRONT_PORT), postgres=$(PG_PORT)"
+
+# --- PostgreSQL ---
+
+check-postgres:
+	@if pg_isready -q -h $(PG_HOST) -p $(PG_PORT) 2>/dev/null; then \
+		echo "PostgreSQL уже запущен на $(PG_HOST):$(PG_PORT)"; \
+	else \
+		echo "PostgreSQL не запущен. Запуск..."; \
+		sudo systemctl start postgresql; \
+		echo "Ожидание готовности PostgreSQL..."; \
+		for i in $$(seq 1 15); do \
+			if pg_isready -q -h $(PG_HOST) -p $(PG_PORT) 2>/dev/null; then \
+				echo "PostgreSQL готов."; \
+				break; \
+			fi; \
+			sleep 1; \
+		done; \
+		if ! pg_isready -q -h $(PG_HOST) -p $(PG_PORT) 2>/dev/null; then \
+			echo "Ошибка: PostgreSQL не запустился за 15 секунд."; \
+			exit 1; \
+		fi; \
+	fi
+
+# --- Запуск в текущем терминале (foreground) ---
+
+run-back: check-postgres
+	@echo "Запуск backend на $(BACK_URL)..."
+	$(BACK_CMD)
+
+run-front:
+	@echo "Запуск frontend на $(FRONT_URL)..."
+	$(FRONT_CMD)
+
+# --- Запуск в фоне + опционально браузер ---
+
+dev: dev-bg open
+	@echo ""
+	@echo "Оба сервера запущены в фоне:"
+	@echo "  Backend:   $(BACK_URL)"
+	@echo "  Frontend:  $(FRONT_URL)"
+	@echo "  PostgreSQL: $(PG_HOST):$(PG_PORT)"
+	@echo ""
+	@echo "  make stop  — остановить"
+
+dev-bg: check-postgres
+	@echo "Запуск backend в фоне..."
+	@nohup bash -c '$(BACK_CMD)' > /tmp/goxus-back.log 2>&1 & \
+		echo $$! > /tmp/goxus-back.pid
+	@echo "  PID: $$(cat /tmp/goxus-back.pid)"
+	@echo "  Лог: /tmp/goxus-back.log"
+	@sleep 2
+	@echo "Запуск frontend в фоне..."
+	@nohup bash -c '$(FRONT_CMD)' > /tmp/goxus-front.log 2>&1 & \
+		echo $$! > /tmp/goxus-front.pid
+	@echo "  PID: $$(cat /tmp/goxus-front.pid)"
+	@echo "  Лог: /tmp/goxus-front.log"
+
+# --- Остановка фоновых процессов ---
+
+stop:
+	@-kill $$(cat /tmp/goxus-back.pid 2>/dev/null) 2>/dev/null; \
+		rm -f /tmp/goxus-back.pid; \
+		echo "Backend остановлен"
+	@-kill $$(cat /tmp/goxus-front.pid 2>/dev/null) 2>/dev/null; \
+		rm -f /tmp/goxus-front.pid; \
+		echo "Frontend остановлен"
+
+# --- Браузер ---
+
+open:
+	@echo "Открытие $(FRONT_URL) в Chrome..."
+	$(CHROME) --new-window $(FRONT_URL) $(BACK_URL) &
