@@ -9,7 +9,7 @@ BACK_PORT := 8080
 FRONT_PORT := 3000
 
 BACK_CMD  := cd $(BACK_DIR) && go run ./src/cmd/goxus/... -runtype=service -config=configs/local/config.yaml
-FRONT_CMD := cd $(FRONT_DIR) && npm run dev
+FRONT_CMD := cd $(FRONT_DIR) && bash -c 'source $(HOME)/.nvm/nvm.sh && nvm use && npm run dev'
 
 CHROME    := /usr/bin/google-chrome-stable
 FRONT_URL := http://localhost:$(FRONT_PORT)
@@ -19,7 +19,8 @@ BACK_URL  := http://localhost:$(BACK_PORT)
 PG_PORT := 5432
 PG_HOST := 127.0.0.1
 
-.PHONY: help check-postgres run-back run-front dev dev-bg stop open
+.PHONY: help check-postgres run-back run-front dev dev-bg stop open \
+        test-back test-back-cover test-front test-front-e2e test
 
 help:
 	@echo "Доступные команды:"
@@ -30,6 +31,11 @@ help:
 	@echo "  make dev-bg         — запустить PostgreSQL + backend + frontend в фоне (без браузера)"
 	@echo "  make stop           — остановить фоновые процессы backend и frontend"
 	@echo "  make open           — открыть frontend в Chrome"
+	@echo "  make test-back      — запустить Go-тесты (back)"
+	@echo "  make test-back-cover — Go-тесты с покрытием (back)"
+	@echo "  make test-front     — запустить Vitest-тесты (front)"
+	@echo "  make test-front-e2e — запустить Playwright E2E (front)"
+	@echo "  make test           — запустить test-back + test-front"
 	@echo ""
 	@echo "Порты: backend=$(BACK_PORT), frontend=$(FRONT_PORT), postgres=$(PG_PORT)"
 
@@ -104,3 +110,24 @@ stop:
 open:
 	@echo "Открытие $(FRONT_URL) в Chrome..."
 	$(CHROME) --new-window $(FRONT_URL) $(BACK_URL) &
+
+# --- Тестирование ---
+
+test-back:
+	@echo "Запуск Go-тестов (back)..."
+	cd $(BACK_DIR) && go test ./... -count=1
+
+test-back-cover:
+	@echo "Запуск Go-тестов с покрытием (back)..."
+	cd $(BACK_DIR) && go test ./... -count=1 -coverprofile=c.out && go tool cover -func=c.out
+
+test-front:
+	@echo "Запуск Vitest-тестов (front)..."
+	cd $(FRONT_DIR) && bash -c 'source $(HOME)/.nvm/nvm.sh && nvm use && npm test'
+
+test-front-e2e:
+	@echo "Запуск Playwright E2E (front)..."
+	cd $(FRONT_DIR) && bash -c 'source $(HOME)/.nvm/nvm.sh && nvm use && npm run test:e2e'
+
+test: test-back test-front test-front-e2e
+	@echo "Все тесты пройдены."
