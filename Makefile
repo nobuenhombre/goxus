@@ -9,7 +9,7 @@ BACK_PORT := 8080
 FRONT_PORT := 3000
 
 BACK_CMD  := cd $(BACK_DIR) && go run ./src/cmd/goxus/... -runtype=service -config=configs/local/config.yaml
-FRONT_CMD := cd $(FRONT_DIR) && bash -c 'source $(HOME)/.nvm/nvm.sh && nvm use && npm run dev'
+FRONT_CMD := cd $(FRONT_DIR) && . $(HOME)/.nvm/nvm.sh && nvm use && npm run dev
 
 CHROME    := /usr/bin/google-chrome-stable
 FRONT_URL := http://localhost:$(FRONT_PORT)
@@ -83,6 +83,10 @@ dev: dev-bg open
 	@echo "  make stop  — остановить"
 
 dev-bg: check-postgres
+	@echo "Остановка предыдущих фоновых процессов (если есть)..."
+	@-kill $$(cat /tmp/goxus-back.pid 2>/dev/null) 2>/dev/null; rm -f /tmp/goxus-back.pid; true
+	@-kill $$(cat /tmp/goxus-front.pid 2>/dev/null) 2>/dev/null; rm -f /tmp/goxus-front.pid; true
+	@sleep 1
 	@echo "Запуск backend в фоне..."
 	@nohup bash -c '$(BACK_CMD)' > /tmp/goxus-back.log 2>&1 & \
 		echo $$! > /tmp/goxus-back.pid
@@ -123,11 +127,11 @@ test-back-cover:
 
 test-front:
 	@echo "Запуск Vitest-тестов (front)..."
-	cd $(FRONT_DIR) && bash -c 'source $(HOME)/.nvm/nvm.sh && nvm use && npm test'
+	cd $(FRONT_DIR) && . $(HOME)/.nvm/nvm.sh && nvm use && npm test
 
 test-front-e2e:
 	@echo "Запуск Playwright E2E (front)..."
-	cd $(FRONT_DIR) && bash -c 'source $(HOME)/.nvm/nvm.sh && nvm use && npm run test:e2e'
+	cd $(FRONT_DIR) && . $(HOME)/.nvm/nvm.sh && nvm use && npm run test:e2e
 
 test: test-back test-front test-front-e2e
 	@echo "Все тесты пройдены."
