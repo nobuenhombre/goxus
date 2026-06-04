@@ -246,19 +246,20 @@ reverse construction order.
 
 ### Test coverage
 
-**Backend (Go):** 19.0% total (statements).
+**Backend (Go):** 20.6% total (statements).
 
 | Package | Coverage | Notes |
 |---------|----------|-------|
 | `domain/user` (impl + authorized) | **86.4%** | Core business logic — auth, CRUD, role management |
 | `pkg/services/rbac` | **85.2%** | Full CRUD for roles, permissions, assignments |
+| `pkg/services/ratelimit` | **73.1%** | In-memory sliding window rate limiter |
 | `config` | **41.4%** | Load/save YAML config |
 | `pkg/tests/postgres` | 0.0% | Test helper only (no production code) |
 | `db/goxus` (xo-generated) | 0.0% | Generated repos — tested via services |
 | `api/server/**` | 0.0% | HTTP handlers, middlewares, router — untested |
 | `cmd/goxus` | 0.0% | Entrypoint, Wire gen |
-| `cron-job`, `log`, `hash`, `cli` | 0.0% | Infrastructure packages |
-| **Total** | **19.0%** | |
+| `cron-job`, `log`, `hash`, `cli`, `ratelimit/provider` | 0.0% | Infrastructure packages |
+| **Total** | **20.6%** | |
 
 **Frontend (TypeScript):** 8.37% statements (8.29% branches, 4.1% functions, 8.03% lines).
 

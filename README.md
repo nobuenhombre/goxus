@@ -179,7 +179,7 @@ including:
 | Background Jobs | robfig/cron v3.0.1 |
 | RBAC | Custom service (roles, permissions, decorator pattern) |
 | Test PostgreSQL | testcontainers |
-| Test coverage (Backend) | **19.0%** total — `domain/user` 86.4%, `rbac` 85.2%, `config` 41.4% |
+| Test coverage (Backend) | **20.6%** total — `domain/user` 86.4%, `rbac` 85.2%, `ratelimit` 73.1%, `config` 41.4% |
 | Language (Frontend) | TypeScript |
 | Framework (Frontend) | Next.js 16.2.6 (App Router) |
 | Runtime (Frontend) | React 19.2.4 |
