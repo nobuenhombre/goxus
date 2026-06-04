@@ -2,7 +2,7 @@
 
 ## 1. Overview
 
-**goxus** is a full-stack SaaS admin panel monorepo orchestrated by
+**goxus** is a full-stack SaaS admin panel orchestrated by
 `github.com/nobuenhombre/goxus`. The orchestrator repo contains **no Go code** and
 **no Next.js code** directly — it is purely a submodule wrapper that aggregates
 two sibling repositories:
@@ -25,6 +25,7 @@ goxus/
 ├── .gitmodules           # submodule definitions
 ├── AGENTS.md             # this file
 ├── LICENSE               # Apache 2.0
+├── Makefile              # orchestrator Makefile (check-postgres, run-back, run-front, test-*)
 ├── PROCESS.md            # development workflow (EN)
 ├── PROCESS.RU.md         # development workflow (RU)
 ├── README.md             # orchestrator entry point (EN)
@@ -91,7 +92,7 @@ git commit -m "chore(back): update to latest"
 
 | Layer | Technology |
 |---|---|
-| Orchestrator | git submodules, root `.gitmodules` |
+| Orchestrator | git submodules, root `.gitmodules`, project-level Makefile |
 | Backend language | Go 1.26.1 |
 | Backend framework | Gin v1.12.0 |
 | Backend DI | Google Wire v0.7.0 |
@@ -100,26 +101,28 @@ git commit -m "chore(back): update to latest"
 | Backend DB driver | pgx (via suikat/pkg/db/connectors/postgres-pgx-db) |
 | Backend migrations | golang-migrate (CLI) |
 | Backend scheduling | robfig/cron v3.0.1 |
+| Backend rate limiting | In-memory sliding-window rate limiter |
 | Backend auth | Token-based (users_tokens table, Bearer header) |
 | Backend RBAC | Custom service (roles, permissions, decorator pattern) |
 | Backend tests | testcontainers (PostgreSQL) + custom postgres helper |
-| Backend test coverage | **19.0%** total — `domain/user` 86.4%, `rbac` 85.2%, `config` 41.4% |
+| Backend test coverage | **17.2%** total — `domain/user` 86.0%, `rbac` 83.1%, `ratelimit` 76.6%, `config` 41.4% |
 | Backend license | Apache 2.0 |
 | Frontend framework | Next.js 16.2.6 (App Router) |
 | Frontend language | TypeScript |
-| Frontend runtime | React 19.2.4 |
+| Frontend runtime | React 19.2.4 + React Compiler |
 | Frontend styling | Tailwind CSS v4 (`@theme` inline, CSS variables) |
-| Frontend UI library | shadcn/ui v4 (base-nova style, 20+ components) |
+| Frontend UI library | shadcn/ui v4 (base-nova style, 22 components) |
 | Frontend form handling | react-hook-form + zod v4 |
 | Frontend package manager | npm |
 | Frontend icons | lucide-react |
 | Frontend notifications | sonner (Toaster) |
+| Frontend theme | next-themes v0.4.6 |
 | Frontend tests | Vitest v4.1.8 + v8 coverage |
 | Frontend API mocking | MSW v2.14.6 |
 | Frontend E2E | Playwright v1.60.0 |
-| Frontend test coverage | **8.37%** total (statements) — `lib/` 75.5%, pages/UI 0% |
+| Frontend test coverage | **13.06%** total (statements) — `lib/` 78.2%, pages/UI 0% |
 | Frontend license | Apache 2.0 |
-| Node.js version | managed via nvm (`lts/*` in `.nvmrc`) |
+| Node.js version | v24.16.0 (managed via nvm, `lts/*` in `.nvmrc`) |
 
 ## 5. Backend Architecture (back/)
 
@@ -130,17 +133,20 @@ src/
     cli/                        # CLI flags (suikat/pkg/clivar)
     config/                     # YAML config (load/save via yaml.v3)
     domain/                     # Business logic orchestrator
-      user/                     #   User domain (CRUD, auth, roles)
+      user/                     #   User domain (CRUD, auth, roles, token cleanup)
     log/                        # Log file management
+    version/                    # Version constant (v0.1.0, set via ldflags-compatible)
     api/server/                 # Gin HTTP server
       router/                   #   Base routes (unversioned /health)
         v1/                     #   v1 API routes
           handlers/             #     Welcome, Health, Auth, User CRUD
-          middlewares/          #     CORS, API logger, Auth token
+          middlewares/          #     CORS, API logger, Auth token, Rate limiter
     cron-job/                   # Cron scheduler
-      jobs/example/             #   Example cron job
+      jobs/example/             #   Example cron job (every 10 min)
+      jobs/token-cleanup/       #   Token cleanup job (deletes expired tokens)
   internal/pkg/db/goxus/        # xo-generated PostgreSQL types + repo
   internal/pkg/services/rbac/   # RBAC service (roles, permissions)
+  internal/pkg/services/ratelimit/ # In-memory sliding-window rate limiter
   internal/pkg/hash/            # Hashing utilities (md5)
   pkg/tests/postgres/           # Testcontainers helper (PostgreSQL 16-18)
   scripts/xo/                   # DB codegen & migrations
@@ -153,28 +159,31 @@ src/
 
 **v1 (all mounted under `/api/v1`):**
 
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| GET | `/api/v1/` | No | Welcome message |
-| GET | `/api/v1/health` | No | Health check |
-| POST | `/api/v1/auth/login` | No | Login (email + password → token) |
-| POST | `/api/v1/user/logout` | Bearer | Logout (invalidate token) |
-| POST | `/api/v1/entity/user/` | Bearer | Create user |
-| GET | `/api/v1/entity/user/` | Bearer | List users |
-| GET | `/api/v1/entity/user/:id` | Bearer | Get user by ID |
-| PUT | `/api/v1/entity/user/:id` | Bearer | Update user |
-| DELETE | `/api/v1/entity/user/:id` | Bearer | Soft-delete user (sets deleted_at) |
-| POST | `/api/v1/entity/user/:id/restore` | Bearer | Restore soft-deleted user |
-| GET | `/api/v1/entity/user/:id/roles` | Bearer | Get user roles |
-| POST | `/api/v1/entity/user/:id/roles` | Bearer | Assign role to user |
-| DELETE | `/api/v1/entity/user/:id/roles/:slug` | Bearer | Revoke role from user |
+| Method | Path | Auth | Rate-limited | Description |
+|--------|------|------|-------------|-------------|
+| GET | `/api/v1/` | No | No | Welcome message |
+| GET | `/api/v1/health` | No | No | Health check |
+| POST | `/api/v1/auth/login` | No | **Yes** | Login (email + password → token). Returns 429 with Retry-After on rate limit |
+| POST | `/api/v1/user/logout` | Bearer | No | Logout (invalidate token) |
+| POST | `/api/v1/entity/user/` | Bearer | No | Create user |
+| GET | `/api/v1/entity/user/` | Bearer | No | List users |
+| GET | `/api/v1/entity/user/:id` | Bearer | No | Get user by ID |
+| PUT | `/api/v1/entity/user/:id` | Bearer | No | Update user |
+| DELETE | `/api/v1/entity/user/:id` | Bearer | No | Soft-delete user (sets deleted_at) |
+| POST | `/api/v1/entity/user/:id/restore` | Bearer | No | Restore soft-deleted user |
+| GET | `/api/v1/entity/user/:id/roles` | Bearer | No | Get user roles |
+| POST | `/api/v1/entity/user/:id/roles` | Bearer | No | Assign role to user |
+| DELETE | `/api/v1/entity/user/:id/roles/:slug` | Bearer | No | Revoke role from user |
 
 Auth middleware validates Bearer token from `users_tokens` table, checks
 `deleted_at` is null on both token and user, updates `last_used_at`.
 
+Login rate limiting uses in-memory sliding-window rate limiter keyed by client IP.
+Returns HTTP 429 with `Retry-After` header when limit is exceeded.
+
 ### Database schema
 
-6 migrations applied:
+7 migrations applied:
 
 | # | File | Description |
 |---|------|-------------|
@@ -183,7 +192,8 @@ Auth middleware validates Bearer token from `users_tokens` table, checks
 | 000003 | `create_rbac_tables` | RBAC tables (rbac_roles, rbac_permissions, rbac_role_permissions, rbac_user_roles) |
 | 000004 | `seed_rbac` | Seed RBAC (4 permissions, admin role, assigned to nobuenhombre@yandex.ru) |
 | 000005 | `seed_user_role_permissions` | Seed 3 more permissions (user_role_add, user_role_view, user_role_delete) + link to admin |
-| 000006 | `create_users_tokens_table` | users_tokens table (token, user_id FK, last_used_at, soft delete) |
+| 000006 | `create_users_tokens_table` | users_tokens table (token, user_id FK, last_used_at, soft delete, expires_at) |
+| 000007 | `create_users_email_partial_unique_index` | Partial unique index on `users(email)` WHERE deleted_at IS NULL |
 
 ### User Domain Service
 
@@ -191,7 +201,7 @@ The user domain uses a **decorator pattern** for authorization:
 
 ```
 Service interface
-  └─ impl.go (pure business logic — CRUD, auth, password hashing)
+  └─ impl.go (pure business logic — CRUD, auth, password hashing, token cleanup)
        └─ authorized_service.go (RBAC decorator — checks permissions before delegation)
 ```
 
@@ -205,6 +215,7 @@ Permissions used:
 - `user_role_add`, `user_role_view`, `user_role_delete` (from 000005)
 
 Login/logout bypass RBAC (public endpoints; token self-identifies).
+`DeleteExpiredTokens` is not permission-gated (internal cron job).
 
 ### RBAC service
 
@@ -215,6 +226,22 @@ Full CRUD service for roles and permissions with methods:
 - GetAllRoles, GetUserRoles, GetRolePermissions, GetAllPermissions
 
 Tested via testcontainers with PostgreSQL (service_test.go, setup_test.go).
+
+### Rate limiter service
+
+In-memory sliding-window rate limiter with configurable limits per window.
+Used for login rate limiting by client IP. Methods:
+- `New(window time.Duration, maxRequests int)` — create limiter
+- `Allow(key string) bool` — check + consume slot
+- `Remaining(key string) int` — remaining requests in current window
+- `ResetAfter(key string) time.Duration` — time until window resets
+
+### Cron jobs
+
+| Job | Schedule | Description |
+|-----|----------|-------------|
+| Example job | Every 10 minutes | Default example task |
+| Token cleanup | Every hour (configurable) | Deletes expired tokens where `expires_at < NOW()`. TTL default: 7 days from `last_used_at` |
 
 ### DI dependency chain (Wire)
 
@@ -228,8 +255,9 @@ main()
        ├─ ProvideRBACService()            → rbac.Service          [depends on DbGoxusRepo]
        ├─ ProvideUserService()            → userdomain.Service    [depends on DbGoxusRepo + RBAC]
        ├─ ProvideDomain()                 → DomainService         [depends on CLI + Config + RBAC + UserService + DbGoxusRepo]
+       ├─ ProvideRateLimiter()            → ratelimit.Service     [depends on Config]
        ├─ ProvideExampleJobs()            → *cron.Cron            [depends on Domain]
-       ├─ ProvideAPI()                    → IHTTPServer           [depends on Config + Log + Domain + UserService]
+       ├─ ProvideAPI()                    → IHTTPServer           [depends on Config + Log + Domain + RateLimiter]
        └─ newApp()                        → IApp                  [top-level orchestrator]
 ```
 
@@ -254,31 +282,33 @@ skill for the full rule, motivation, code review checklist, and refactoring exam
 
 ### Test coverage
 
-**Backend (Go):** 20.6% total (statements).
+**Backend (Go):** 17.2% total (statements).
 
 | Package | Coverage | Notes |
 |---------|----------|-------|
-| `domain/user` (impl + authorized) | **86.4%** | Core business logic — auth, CRUD, role management |
-| `pkg/services/rbac` | **85.2%** | Full CRUD for roles, permissions, assignments |
-| `pkg/services/ratelimit` | **73.1%** | In-memory sliding window rate limiter |
+| `domain/user` (impl + authorized) | **86.0%** | Core business logic — auth, CRUD, role management, token cleanup |
+| `pkg/services/rbac` | **83.1%** | Full CRUD for roles, permissions, assignments |
+| `pkg/services/ratelimit` | **76.6%** | In-memory sliding window rate limiter |
 | `config` | **41.4%** | Load/save YAML config |
 | `pkg/tests/postgres` | 0.0% | Test helper only (no production code) |
 | `db/goxus` (xo-generated) | 0.0% | Generated repos — tested via services |
 | `api/server/**` | 0.0% | HTTP handlers, middlewares, router — untested |
 | `cmd/goxus` | 0.0% | Entrypoint, Wire gen |
-| `cron-job`, `log`, `hash`, `cli`, `ratelimit/provider` | 0.0% | Infrastructure packages |
-| **Total** | **20.6%** | |
+| `cron-job`, `log`, `hash`, `cli`, `ratelimit/provider`, `version` | 0.0% | Infrastructure packages |
+| **Total** | **17.2%** | |
 
-**Frontend (TypeScript):** 8.37% statements (8.29% branches, 4.1% functions, 8.03% lines).
+**Frontend (TypeScript):** 13.06% statements (13.72% branches, 7.14% functions, 13.4% lines).
 
 | Package | Coverage | Notes |
 |---------|----------|-------|
-| `lib/` total | **75.5%** | API client layer (auth.ts, users.ts, utils.ts) |
-| `lib/auth.ts` | **85.0%** | Login/logout, token helpers |
-| `lib/users.ts` | **71.4%** | User CRUD API client |
+| `lib/` total | **78.2%** | API client layer (api.ts, auth.ts, users.ts, date.ts, utils.ts) |
+| `lib/api.ts` | **100%** | Shared API fetch helpers (apiFetch, apiFetchJSON, ApiResponseError) |
+| `lib/auth.ts` | **77.5%** | Login/logout, token helpers |
+| `lib/users.ts` | **62.5%** | User CRUD API client |
+| `lib/date.ts` | 0.0% | Date formatting utility (no logic to test) |
 | `lib/utils.ts` | 0.0% | cn() utility (no logic to test) |
 | Pages, components, hooks, providers | 0.0% | No component tests yet |
-| **Total** | **8.37%** | |
+| **Total** | **13.06%** | |
 
 ### Test infrastructure
 
@@ -309,26 +339,29 @@ src/
 ├── components/                   # App components and shadcn/ui registry
 │   ├── app-header.tsx            # Header: sidebar trigger, nav, search, theme toggle, user
 │   ├── app-sidebar.tsx           # Sidebar: team switcher, nav groups, user profile, logout
-│   └── ui/                       # shadcn/ui v4 components (base-nova style)
+│   └── ui/                       # shadcn/ui v4 components (base-nova style, 22 components)
 │       ├── avatar.tsx, badge.tsx, button.tsx, card.tsx, checkbox.tsx, collapsible.tsx
 │       ├── command.tsx, dialog.tsx, dropdown-menu.tsx, form.tsx, input.tsx
 │       ├── input-group.tsx, label.tsx, scroll-area.tsx, separator.tsx, sheet.tsx
 │       ├── sidebar.tsx, skeleton.tsx, sonner.tsx, table.tsx, textarea.tsx, tooltip.tsx
 ├── hooks/
+│   ├── use-local-storage.ts      # useSyncExternalStore-based localStorage hook
 │   └── use-mobile.ts             # Mobile breakpoint detection (768px)
 ├── lib/
+│   ├── api.ts                    # Shared API fetch helpers (apiFetch, apiFetchJSON, API_BASE)
 │   ├── auth.ts                   # Auth API client (login, logout, token CRUD, isAuthenticated)
+│   ├── date.ts                   # formatDate() date formatting utility
 │   ├── users.ts                  # User CRUD API client (fetchUsers, deleteUser)
 │   ├── utils.ts                  # cn() helper (clsx + tailwind-merge)
 │   └── __tests__/
 │       ├── setup.ts              # Vitest + MSW lifecycle (beforeAll/afterEach/afterAll)
-│       ├── auth.test.ts          # 6 tests: token helpers + login + logout
-│       ├── users.test.ts         # 4 tests: fetchUsers (auth, success, 401) + deleteUser
+│       ├── auth.test.ts          # 10 tests: token helpers + login + logout (MSW-mocked)
+│       ├── users.test.ts         # 5 tests: fetchUsers (auth, success, 401) + deleteUser
 │       └── mocks/
 │           ├── handlers.ts       # MSW handlers for /api/v1/auth/login, /user/logout, /entity/user/
 │           └── server.ts         # MSW server setup
 ├── providers/
-│   └── theme-provider.tsx        # Custom light/dark theme provider (localStorage persistence)
+│   └── theme-provider.tsx        # next-themes wrapper (supports light/dark/system, localStorage)
 └── e2e/
     └── auth.spec.ts              # Playwright: login form, validation, login→dashboard→logout flow
 ```
@@ -341,7 +374,7 @@ src/
 4. Login page POSTs to `/api/v1/auth/login`, receives `{token, user_id, name, email}`.
 5. Token is saved to localStorage via `setToken()`, user info to `goxus_user_name`/`goxus_user_email`.
 6. Frontend redirects to `/` (dashboard).
-7. All subsequent API calls include `Authorization: Bearer <token>` header.
+7. All subsequent API calls include `Authorization: Bearer *** header via apiFetch()`.
 8. Logout POSTs to `/api/v1/user/logout`, clears localStorage, redirects to `/login`.
 
 ### Route map
@@ -359,9 +392,10 @@ Additional routes planned in sidebar but not yet implemented:
 ### Testing
 
 - **Unit tests**: Vitest + jsdom environment. Auth and users API clients tested with MSW-mocked HTTP.
+  15 tests total: 10 for auth (token helpers, login, logout), 5 for users (fetchUsers, deleteUser).
 - **E2E tests**: Playwright with two webServers (back + front). Tests login form rendering,
   validation, and the full login→dashboard→logout flow.
-- **Coverage**: Only `lib/` is covered (~75%). Pages, components, hooks, and providers are at 0%.
+- **Coverage**: Only `lib/` is covered (~78%). Pages, components, hooks, and providers are at 0%.
 
 ### Tech notes
 
@@ -369,7 +403,8 @@ Additional routes planned in sidebar but not yet implemented:
 - Tailwind v4 uses `@theme` inline CSS variables (no `tailwind.config.js`), `@import "tailwindcss"`.
 - shadcn v4 components use Base UI `render` prop pattern (not Radix `asChild`).
 - `DropdownMenuLabel` MUST be wrapped in `DropdownMenuGroup` to avoid runtime errors.
-- Theme provider is custom (not `next-themes`), stores theme in localStorage under `goxus_theme` key.
+- Theme provider wraps `next-themes` `ThemeProvider` (light/dark/system, stored in localStorage).
+- React Compiler is enabled in `next.config.ts` (`experimental.reactCompiler`).
 - `NEXT_PUBLIC_API_URL` defaults to `http://localhost:8080`.
 - Root route `/` is served by `(dashboard)/page.tsx` — the `(dashboard)` route group is transparent to URL.
 - Root `app/page.tsx` does not exist; all routes live either in `(dashboard)` or `/login`.
@@ -398,12 +433,17 @@ Additional routes planned in sidebar but not yet implemented:
 - **Orchestrator-level docs** include PROCESS.md and PROCESS.RU.md with detailed
   submodule workflow, IDE setup (GoLand for back/, PhpStorm for front/), and a
   worked example of changing .gitignore across clones.
+- **Orchestrator-level Makefile** with targets: check-postgres, run-back, run-front,
+  dev, dev-bg, stop, open, test-back, test-back-cover, test-front, test-front-e2e, test.
+  PostgreSQL is managed via `systemctl start postgresql` (not pg_ctlcluster).
 - **v1 routes are split** — "public" (Welcome, Health, Login) and "protected"
-  (everything under `:authMiddleware`). Auth middleware reads Bearer token,
-  validates against `users_tokens` table, and sets `token`/`user` in Gin context.
+  (everything under `:authMiddleware`). Login additionally has rate limiting middleware.
+  Auth middleware reads Bearer token, validates against `users_tokens` table, and sets
+  `token`/`user` in Gin context.
 - **User domain decorator** — `authorized_service.go` wraps the raw service.
   Permission checks use `actorID` from context (set by auth middleware).
   Login/Logout bypass RBAC since the token identifies itself.
+  `DeleteExpiredTokens` bypasses RBAC (internal cron job).
 - **Frontend: no root page.tsx** — the `(dashboard)` route group handles `/`.
   The root layout wraps both dashboard and login with ThemeProvider + Toaster.
 - **Frontend: nvm wrapper** — use `bash -c 'source $(HOME)/.nvm/nvm.sh && nvm use && CMD'`
@@ -423,14 +463,15 @@ Additional routes planned in sidebar but not yet implemented:
 | Run command in each | `git submodule foreach '<command>'` |
 | Pull + submodules | `git pull --recurse-submodules` |
 | Status of submodules | `git submodule status` |
+| Check postgres | `make check-postgres` |
 | Backend dev server | `cd back && go run ./src/cmd/goxus/... -runtype=service -config=configs/local/config.yaml` |
-| Backend Wire gen | `cd back && make wire` |
-| Backend tests | `cd back && go test ./...` |
-| Backend test (with coverage) | `cd back && go test ./... -coverprofile=c.out && go tool cover -func=c.out` |
-| Backend coverage (total) | `cd back && go test ./... -coverprofile=c.out && go tool cover -func=c.out | grep total` |
 | Frontend dev server | `cd front && nvm use && npm run dev` |
-| Frontend build | `cd front && nvm use && npm run build` |
-| Frontend lint | `cd front && nvm use && npm run lint` |
+| Dev (bg, all services) | `make dev-bg` or `make dev` (opens browser) |
+| Stop bg services | `make stop` |
+| Backend Wire gen | `cd back && make wire` |
+| Backend tests | `cd back && go test ./... -count=1` |
+| Backend test (with coverage) | `cd back && go test ./... -count=1 -coverprofile=c.out && go tool cover -func=c.out` |
+| Backend coverage (total) | `cd back && go test ./... -count=1 -coverprofile=c.out && go tool cover -func=c.out | grep total` |
 | Frontend tests | `cd front && nvm use && npm test` |
 | Frontend tests (with coverage) | `cd front && nvm use && npm run test:coverage` |
 | Frontend tests (watch) | `cd front && nvm use && npm run test:watch` |

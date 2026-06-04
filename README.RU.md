@@ -9,8 +9,9 @@
 **goxus** — это full-stack SaaS admin panel с бэкендом на Go 1.26.1 и фронтендом на Next.js 16.2.6,
 оркестрируемая из этого монорепозитория. Бэкенд предоставляет Gin HTTP API с PostgreSQL,
 токен-аутентификацией (вход/выход), RBAC (ролевой моделью доступа), CRUD-управлением
-пользователями и планировщиком cron-задач. Фронтенд — TypeScript admin dashboard на React 19,
-построенный на Tailwind CSS v4 и shadcn/ui v4 (20+ компонентов), с формой входа,
+пользователями, rate-limited эндпоинтом входа, планировщиком cron-задач и очисткой
+просроченных токенов. Фронтенд — TypeScript admin dashboard на React 19,
+построенный на Tailwind CSS v4 и shadcn/ui v4 (22 компонента), с формой входа,
 сайдбар-навигацией, CRUD-таблицей пользователей и переключением тёмной/светлой темы.
 
 ---
@@ -24,11 +25,13 @@ goxus объединяет минималистичный высокопроиз
 развёртывания и CI/CD.
 
 В бэкенде реализованы:
-- **Токен-аутентификация** — вход/выход по Bearer-токенам, таблица `users_tokens` с soft-delete
+- **Токен-аутентификация** — вход/выход по Bearer-токенам, таблица `users_tokens` с soft-delete и сроком действия
+- **Rate limiting входа** — in-memory sliding-window ограничитель по IP клиента с HTTP 429 + Retry-After
 - **CRUD пользователей** — создание, чтение, обновление, удаление с проверкой разрешений RBAC
 - **RBAC-сервис** — роли, разрешения, назначение ролей пользователям (полный CRUD)
-- **Версионированное API** — маршруты `/api/v1/` с публичными и аутентифицированными эндпоинтами
-- **Планировщик cron** — YAML-конфигурируемые задачи (пример: каждые 10 минут)
+- **Очистка просроченных токенов** — cron-задача, удаляющая токены старше TTL (по умолч. 7 дней)
+- **Версионированное API** — маршруты `/api/v1/` с публичными, аутентифицированными и rate-limited эндпоинтами
+- **Планировщик cron** — YAML-конфигурируемые задачи (пример + очистка токенов)
 - **xo codegen** — типобезопасные типы PostgreSQL, сгенерированные из схемы
 - **golang-migrate** — миграции БД с seed-данными
 
@@ -36,8 +39,9 @@ goxus объединяет минималистичный высокопроиз
 - **Admin dashboard** — сайдбар-навигация со сворачиваемым меню, адаптивный макет
 - **Страница входа** — форма с валидацией (zod + react-hook-form), сохранение токена
 - **Управление пользователями** — таблица с поиском, пагинацией, диалогом подтверждения удаления
-- **Тёмная/светлая тема** — кастомный провайдер темы с сохранением в localStorage
+- **Тёмная/светлая тема** — next-themes провайдер с сохранением в localStorage
 - **Auth guard** — маршруты dashboard автоматически перенаправляют на `/login` без токена
+- **Общий API-клиент** — `apiFetch` / `apiFetchJSON` с автоматической вставкой Bearer-токена
 
 ---
 
@@ -45,7 +49,7 @@ goxus объединяет минималистичный высокопроиз
 
 | Директория | Компонент | Описание |
 |-----------|-----------|----------|
-| `back/`   | Go Backend | Gin HTTP API, аутентификация, RBAC, PostgreSQL, cron. Репозиторий: [goxus.back](https://github.com/nobuenhombre/goxus.back) |
+| `back/`   | Go Backend | Gin HTTP API, аутентификация, RBAC, PostgreSQL, rate limiter, cron. Репозиторий: [goxus.back](https://github.com/nobuenhombre/goxus.back) |
 | `front/`  | Next.js Frontend | Admin dashboard с shadcn/ui v4, TypeScript, React 19. Репозиторий: [goxus.front](https://github.com/nobuenhombre/goxus.front) |
 | `PROCESS.md` | Документация | Рабочий процесс с submodule, настройка IDE, примеры (EN) |
 | `PROCESS.RU.md` | Процесс разработки | То же, что PROCESS.md, на русском |
@@ -111,7 +115,8 @@ npm install
 │  │  RBAC         │             │  Sidebar + Header    │  │
 │  │  Auth (token) │             │  Login + Auth Guard  │  │
 │  │  User CRUD    │             │  Users CRUD Table    │  │
-│  │  Cron Jobs    │             │  Theme (dark/light)  │  │
+│  │  Rate limiter │             │  Theme (dark/light)  │  │
+│  │  Cron Jobs    │             │  API client (lib/)   │  │
 │  └───────────────┘             └──────────────────────┘  │
 └──────────────────────────────────────────────────────────┘
 ```
@@ -120,11 +125,13 @@ npm install
   CI-пайплайнов и развёртывания.
 - **Go-бэкенд** предоставляет RESTful JSON API через Gin на `/api/v1/`, подключается
   к PostgreSQL, реализует токен-аутентификацию (вход/выход по Bearer-токенам),
-  CRUD пользователей с проверкой разрешений RBAC и выполняет фоновые cron-задачи.
+  CRUD пользователей с проверкой разрешений RBAC, rate-limited вход через
+  sliding-window ограничитель и фоновые cron-задачи, включая очистку просроченных токенов.
 - **Next.js-фронтенд** потребляет API и рендерит admin dashboard на React 19.
   Включает сворачиваемый сайдбар с группами навигации, хедер с поиском/переключателем
-  темы/меню пользователя, страницу входа с валидацией zod и CRUD-таблицу
-  пользователей с поиском, пагинацией и подтверждением удаления.
+  темы/меню пользователя, страницу входа с валидацией zod, CRUD-таблицу
+  пользователей с поиском/пагинацией/подтверждением удаления и общий слой
+  API-клиента (`api.ts`) для автоматической вставки Bearer-токена.
 
 ---
 
@@ -160,14 +167,29 @@ npm run dev
 
 Сервер разработки запускается на `http://localhost:3000`.
 
+### Быстрый запуск (Makefile оркестратора)
+
+```bash
+make dev          # проверить postgres + запустить backend + frontend + открыть браузер
+make dev-bg       # то же, без браузера
+make stop         # остановить фоновые процессы
+```
+
 ### Тесты фронтенда
 
 ```bash
 cd front
 nvm use
-npm test              # Vitest unit tests (с MSW)
+npm test              # Vitest unit tests (с MSW) — 15 тестов
 npm run test:coverage # С отчётом о покрытии
 npm run test:e2e      # Playwright E2E тесты
+```
+
+### Тесты бэкенда
+
+```bash
+cd back
+go test ./... -count=1
 ```
 
 ### Процесс разработки
@@ -192,25 +214,27 @@ submodule, включая:
 | Драйвер БД | pgx (через suikat/pkg/db/connectors/postgres-pgx-db) |
 | Миграции | golang-migrate/migrate |
 | Аутентификация | Токен-ориентированная (Bearer, таблица users_tokens) |
+| Rate limiting | In-memory sliding-window |
 | Фоновые задачи | robfig/cron v3.0.1 |
 | RBAC | Кастомный сервис (роли, разрешения, декоратор) |
 | Тесты PostgreSQL | testcontainers |
-| Покрытие тестами (бэкенд) | **20.6%** в целом — `domain/user` 86.4%, `rbac` 85.2%, `ratelimit` 73.1%, `config` 41.4% |
+| Покрытие тестами (бэкенд) | **17.2%** в целом — `domain/user` 86.0%, `rbac` 83.1%, `ratelimit` 76.6%, `config` 41.4% |
 | Язык (фронтенд) | TypeScript |
 | Фреймворк (фронтенд) | Next.js 16.2.6 (App Router) |
-| Среда выполнения (фронтенд) | React 19.2.4 |
+| Среда выполнения (фронтенд) | React 19.2.4 + React Compiler |
 | CSS | Tailwind CSS v4 (CSS-переменные, `@theme`) |
-| UI-компоненты | shadcn/ui v4 (base-nova, 20+ компонентов) |
+| UI-компоненты | shadcn/ui v4 (base-nova, 22 компонента) |
 | Формы | react-hook-form + zod v4 |
 | Иконки | lucide-react |
 | Уведомления | sonner (Toaster) |
+| Тема | next-themes v0.4.6 |
 | Unit-тесты | Vitest v4.1.8 + v8 coverage, jsdom |
 | Моки API | MSW v2.14.6 |
 | E2E-тесты | Playwright v1.60.0 |
-| Покрытие тестами (фронтенд) | **8.37%** (операторы) — `lib/` 75.5%, страницы/UI 0% |
+| Покрытие тестами (фронтенд) | **13.06%** (операторы) — `lib/` 78.2%, страницы/UI 0% |
 | Менеджер пакетов (фронтенд) | npm |
-| Node.js | nvm (`lts/*` в `.nvmrc`) |
-| Оркестрация | Git submodules |
+| Node.js | v24.16.0 (nvm, `lts/*` в `.nvmrc`) |
+| Оркестрация | Git submodules + Makefile |
 | Лицензия | Apache 2.0 |
 
 ---
