@@ -236,6 +236,14 @@ main()
 Every provider returns `(Service, func(), error)` — Wire tracks cleanup in
 reverse construction order.
 
+### Architecture rule: DomainService as the sole gateway
+
+**API handlers, cronjobs, and any other entry point MUST interact ONLY with
+`domainapp.DomainService`** — never directly with repositories or internal
+services (userdomain, rbac, ratelimit). See the
+[domain-service-orchestrator-gateway](./golang/domain-service-orchestrator-gateway/SKILL.md)
+skill for the full rule, motivation, code review checklist, and refactoring examples.
+
 ### 3 run modes (controlled by `-runtype`)
 
 | Mode | Flag | Behaviour |
