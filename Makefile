@@ -8,7 +8,9 @@ FRONT_DIR := front
 BACK_PORT := 8080
 FRONT_PORT := 3000
 
-BACK_CMD  := cd $(BACK_DIR) && go run ./src/cmd/goxus/... -runtype=service -config=configs/local/config.yaml
+BACK_CONFIG ?= configs/local/config.yaml
+
+BACK_CMD  := cd $(BACK_DIR) && go run ./src/cmd/goxus/... -runtype=service -config=$(BACK_CONFIG)
 FRONT_CMD := cd $(FRONT_DIR) && . $(HOME)/.nvm/nvm.sh && nvm use && npm run dev
 
 CHROME    := /usr/bin/google-chrome-stable
@@ -20,6 +22,7 @@ PG_PORT := 5432
 PG_HOST := 127.0.0.1
 
 .PHONY: help check-postgres run-back run-front dev dev-bg stop open \
+        kill-back kill-front \
         test-back test-back-cover test-front test-front-e2e test
 
 help:
@@ -84,8 +87,7 @@ dev: dev-bg open
 
 dev-bg: check-postgres
 	@echo "Остановка предыдущих фоновых процессов (если есть)..."
-	@-kill $$(cat /tmp/goxus-back.pid 2>/dev/null) 2>/dev/null; rm -f /tmp/goxus-back.pid; true
-	@-kill $$(cat /tmp/goxus-front.pid 2>/dev/null) 2>/dev/null; rm -f /tmp/goxus-front.pid; true
+	@$(MAKE) kill-back kill-front
 	@sleep 1
 	@echo "Запуск backend в фоне..."
 	@nohup bash -c '$(BACK_CMD)' > /tmp/goxus-back.log 2>&1 & \
@@ -99,15 +101,39 @@ dev-bg: check-postgres
 	@echo "  PID: $$(cat /tmp/goxus-front.pid)"
 	@echo "  Лог: /tmp/goxus-front.log"
 
+# --- Принудительное завершение по PID файлу + порту ---
+
+kill-back:
+	@-kill $$(cat /tmp/goxus-back.pid 2>/dev/null) 2>/dev/null; true
+	@-fuser -k $(BACK_PORT)/tcp >/dev/null 2>&1; true
+	@rm -f /tmp/goxus-back.pid
+	@# Ждём освобождения порта (макс 10 сек)
+	@for i in $$(seq 1 10); do \
+		if ! lsof -ti :$(BACK_PORT) >/dev/null 2>&1; then \
+			exit 0; \
+		fi; \
+		sleep 1; \
+	done; \
+	echo "  ⚠️  Порт $(BACK_PORT) не освободился за 10 сек" >&2
+
+kill-front:
+	@-kill $$(cat /tmp/goxus-front.pid 2>/dev/null) 2>/dev/null; true
+	@-fuser -k $(FRONT_PORT)/tcp >/dev/null 2>&1; true
+	@rm -f /tmp/goxus-front.pid
+	@for i in $$(seq 1 10); do \
+		if ! lsof -ti :$(FRONT_PORT) >/dev/null 2>&1; then \
+			exit 0; \
+		fi; \
+		sleep 1; \
+	done; \
+	echo "  ⚠️  Порт $(FRONT_PORT) не освободился за 10 сек" >&2
+
 # --- Остановка фоновых процессов ---
 
 stop:
-	@-kill $$(cat /tmp/goxus-back.pid 2>/dev/null) 2>/dev/null; \
-		rm -f /tmp/goxus-back.pid; \
-		echo "Backend остановлен"
-	@-kill $$(cat /tmp/goxus-front.pid 2>/dev/null) 2>/dev/null; \
-		rm -f /tmp/goxus-front.pid; \
-		echo "Frontend остановлен"
+	@$(MAKE) kill-back kill-front
+	@echo "Backend остановлен"
+	@echo "Frontend остановлен"
 
 # --- Браузер ---
 

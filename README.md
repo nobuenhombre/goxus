@@ -17,7 +17,7 @@ goxus combines a minimal, high-performance Go API layer with a responsive Next.j
 The backend features:
 - **Token authentication** — login/logout with Bearer tokens, `users_tokens` table with soft-delete and expiry
 - **Login rate limiting** — in-memory sliding-window rate limiter per client IP with HTTP 429 + Retry-After
-- **User management CRUD** — create, read, update, delete users with RBAC permission checks
+- **User management CRUD** — create, read, update, delete (soft), restore, and change password with RBAC permission checks
 - **RBAC service** — roles, permissions, user-role assignment with full CRUD
 - **Expired token cleanup** — cron job deleting tokens past TTL (default 7 days)
 - **Versioned API** — routes under `/api/v1/` with public, authenticated, and rate-limited endpoints
@@ -28,7 +28,7 @@ The backend features:
 The frontend features:
 - **Admin dashboard** — sidebar navigation with collapsible menu, responsive layout
 - **Login page** — validated email/password form (zod + react-hook-form), token storage
-- **User management UI** — searchable table with pagination, delete confirmation dialog
+- **User management UI** — TanStack Table with search, status/email filter tabs, pagination with page size selector, create/edit dialog, change password dialog, delete confirmation, restore soft-deleted users
 - **Dark/light theme** — next-themes provider with localStorage persistence
 - **Auth guard** — dashboard routes automatically redirect to `/login` if unauthenticated
 - **Shared API client** — `apiFetch` / `apiFetchJSON` helpers with automatic Bearer token injection
@@ -111,8 +111,8 @@ npm install
 ```
 
 - The **orchestrator** wraps both submodules and is the entry point for scripts, CI pipelines, and deployment.
-- The **Go backend** exposes a RESTful JSON API via Gin at `/api/v1/`, connects to PostgreSQL for persistence, provides token-based auth (login/logout with Bearer tokens), user CRUD with RBAC permission checks, rate-limited login endpoint via sliding-window rate limiter, and runs background cron tasks including expired token cleanup.
-- The **Next.js frontend** consumes the API and renders an admin dashboard with React 19. Features include a collapsible sidebar with navigation groups, a header with search/theme toggle/user menu, a login page with zod validation, a users CRUD table with search/pagination/delete confirmation, and a shared API client layer (`api.ts`) for Bearer token injection.
+- The **Go backend** exposes a RESTful JSON API via Gin at `/api/v1/`, connects to PostgreSQL for persistence, provides token-based auth (login/logout with Bearer tokens), user CRUD with RBAC permission checks (including soft-delete, restore, and change password), rate-limited login endpoint via sliding-window rate limiter, and runs background cron tasks including expired token cleanup.
+- The **Next.js frontend** consumes the API and renders an admin dashboard with React 19. Features include a collapsible sidebar with navigation groups, a header with search/theme toggle/user menu, a login page with zod validation, a users CRUD table with TanStack Table and client-side search/status-email filter tabs/pagination with page size selector, dialogs for create/edit/change password/delete confirmation, restore for soft-deleted users, and a shared API client layer (`api.ts`) for Bearer token injection.
 
 ---
 
@@ -154,6 +154,14 @@ The development server starts at `http://localhost:3000`.
 make dev          # check postgres + start backend + frontend + open browser
 make dev-bg       # same, no browser
 make stop         # stop background processes
+make kill-back    # force-stop backend (kill PID + free port)
+make kill-front   # force-stop frontend (kill PID + free port)
+```
+
+Override the backend config:
+
+```bash
+make BACK_CONFIG=configs/e2e/config.yaml run-back   # run with E2E config (rate limiting disabled)
 ```
 
 ### Frontend Tests
@@ -163,7 +171,7 @@ cd front
 nvm use
 npm test              # Vitest unit tests (with MSW) — 15 tests
 npm run test:coverage # With coverage report
-npm run test:e2e      # Playwright E2E tests
+npm run test:e2e      # Playwright E2E tests — 6 spec files, ~596 lines
 ```
 
 ### Backend Tests
@@ -209,9 +217,10 @@ including:
 | Icons | lucide-react |
 | Notifications | sonner (Toaster) |
 | Theme | next-themes v0.4.6 |
-| Unit Tests | Vitest v4.1.8 + v8 coverage, jsdom |
-| API Mocking | MSW v2.14.6 |
-| E2E Tests | Playwright v1.60.0 |
+|| Unit Tests | Vitest v4.1.8 + v8 coverage, jsdom |
+|| Data Table | @tanstack/react-table v8.21.3 |
+|| API Mocking | MSW v2.14.6 |
+|| E2E Tests | Playwright v1.60.0 |
 | Test coverage (Frontend) | **13.06%** (statements) — `lib/` 78.2%, pages/UI 0% |
 | Package Manager (Frontend) | npm |
 | Node.js version | v24.16.0 (nvm, `lts/*` in `.nvmrc`) |

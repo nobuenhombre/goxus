@@ -117,6 +117,7 @@ git commit -m "chore(back): update to latest"
 | Frontend icons | lucide-react |
 | Frontend notifications | sonner (Toaster) |
 | Frontend theme | next-themes v0.4.6 |
+| Frontend AI skills | shadcn/ui skill installed via [skills.sh](https://skills.sh) → `~/.agents/skills/shadcn/` |
 | Frontend tests | Vitest v4.1.8 + v8 coverage |
 | Frontend API mocking | MSW v2.14.6 |
 | Frontend E2E | Playwright v1.60.0 |
@@ -139,7 +140,7 @@ src/
     api/server/                 # Gin HTTP server
       router/                   #   Base routes (unversioned /health)
         v1/                     #   v1 API routes
-          handlers/             #     Welcome, Health, Auth, User CRUD
+          handlers/             #     Welcome, Health, Auth, User CRUD, change password
           middlewares/          #     CORS, API logger, Auth token, Rate limiter
     cron-job/                   # Cron scheduler
       jobs/example/             #   Example cron job (every 10 min)
@@ -171,6 +172,7 @@ src/
 | PUT | `/api/v1/entity/user/:id` | Bearer | No | Update user |
 | DELETE | `/api/v1/entity/user/:id` | Bearer | No | Soft-delete user (sets deleted_at) |
 | POST | `/api/v1/entity/user/:id/restore` | Bearer | No | Restore soft-deleted user |
+| PUT | `/api/v1/entity/user/:id/password` | Bearer | No | Change user password (requires `user_edit`) |
 | GET | `/api/v1/entity/user/:id/roles` | Bearer | No | Get user roles |
 | POST | `/api/v1/entity/user/:id/roles` | Bearer | No | Assign role to user |
 | DELETE | `/api/v1/entity/user/:id/roles/:slug` | Bearer | No | Revoke role from user |
@@ -201,7 +203,7 @@ The user domain uses a **decorator pattern** for authorization:
 
 ```
 Service interface
-  └─ impl.go (pure business logic — CRUD, auth, password hashing, token cleanup)
+  └─ impl.go (pure business logic — CRUD, auth, password hashing, token cleanup, change password)
        └─ authorized_service.go (RBAC decorator — checks permissions before delegation)
 ```
 
@@ -332,18 +334,24 @@ src/
 │   ├── (dashboard)/              # Route group — authenticated admin shell
 │   │   ├── layout.tsx            #   Dashboard layout (SidebarProvider, auth guard)
 │   │   ├── page.tsx              #   Dashboard home (stats cards: users, sessions, roles, uptime)
-│   │   └── users/
-│   │       └── page.tsx          #   Users CRUD table (search, pagination, delete dialog)
+|   │   └── users/
+|   │       ├── page.tsx              #   Users CRUD table (TanStack Table, filters, pagination, delete, restore, change password)
+|   │       ├── users-action-dialog.tsx #   Create/Edit user dialog (react-hook-form + zod)
+|   │       └── change-password-dialog.tsx # Change password dialog
 │   └── login/
 │       └── page.tsx              # Login form (zod validation, react-hook-form)
 ├── components/                   # App components and shadcn/ui registry
 │   ├── app-header.tsx            # Header: sidebar trigger, nav, search, theme toggle, user
 │   ├── app-sidebar.tsx           # Sidebar: team switcher, nav groups, user profile, logout
-│   └── ui/                       # shadcn/ui v4 components (base-nova style, 22 components)
+│   ├── data-table/               # Reusable data table with pagination
+│   │   ├── index.ts              #   Re-export
+│   │   └── pagination.tsx        #   Pagination widget (page numbers with ellipsis, page size selector)
+│   └── ui/                       # shadcn/ui v4 components (base-nova style, 27 components)
 │       ├── avatar.tsx, badge.tsx, button.tsx, card.tsx, checkbox.tsx, collapsible.tsx
-│       ├── command.tsx, dialog.tsx, dropdown-menu.tsx, form.tsx, input.tsx
-│       ├── input-group.tsx, label.tsx, scroll-area.tsx, separator.tsx, sheet.tsx
-│       ├── sidebar.tsx, skeleton.tsx, sonner.tsx, table.tsx, textarea.tsx, tooltip.tsx
+│       ├── combobox.tsx, command.tsx, dialog.tsx, dropdown-menu.tsx, form.tsx, input.tsx
+│       ├── input-group.tsx, item.tsx, label.tsx, popover.tsx, scroll-area.tsx, select.tsx
+│       ├── separator.tsx, sheet.tsx, sidebar.tsx, skeleton.tsx, sonner.tsx, table.tsx
+│       ├── tabs.tsx, textarea.tsx, tooltip.tsx
 ├── hooks/
 │   ├── use-local-storage.ts      # useSyncExternalStore-based localStorage hook
 │   └── use-mobile.ts             # Mobile breakpoint detection (768px)
@@ -351,19 +359,26 @@ src/
 │   ├── api.ts                    # Shared API fetch helpers (apiFetch, apiFetchJSON, API_BASE)
 │   ├── auth.ts                   # Auth API client (login, logout, token CRUD, isAuthenticated)
 │   ├── date.ts                   # formatDate() date formatting utility
-│   ├── users.ts                  # User CRUD API client (fetchUsers, deleteUser)
+│   ├── users.ts                  # User CRUD API client (fetchUsers, createUser, updateUser, deleteUser, restoreUser, changeUserPassword)
 │   ├── utils.ts                  # cn() helper (clsx + tailwind-merge)
 │   └── __tests__/
 │       ├── setup.ts              # Vitest + MSW lifecycle (beforeAll/afterEach/afterAll)
-│       ├── auth.test.ts          # 10 tests: token helpers + login + logout (MSW-mocked)
+│       ├── auth.test.ts           # 10 tests: token helpers + login + logout (MSW-mocked)
 │       ├── users.test.ts         # 5 tests: fetchUsers (auth, success, 401) + deleteUser
 │       └── mocks/
-│           ├── handlers.ts       # MSW handlers for /api/v1/auth/login, /user/logout, /entity/user/
+│           ├── handlers.ts       # MSW handlers for auth/login, /user/logout, /entity/user/, /entity/user/:id/restore
 │           └── server.ts         # MSW server setup
 ├── providers/
 │   └── theme-provider.tsx        # next-themes wrapper (supports light/dark/system, localStorage)
+├── types/
+│   └── tanstack-table.d.ts       # TanStack Table ColumnMeta extension (className)
 └── e2e/
-    └── auth.spec.ts              # Playwright: login form, validation, login→dashboard→logout flow
+    ├── auth.spec.ts              # Playwright: login form, validation, login→dashboard→logout flow
+    ├── users-delete.spec.ts      # Playwright: user delete flow (71 lines)
+    ├── users-edit.spec.ts        # Playwright: user edit flow (51 lines)
+    ├── users-filters-email-verified.spec.ts  # Playwright: email verification filters (65 lines)
+    ├── users-filters-soft-deleted.spec.ts    # Playwright: soft-deleted status filters (120 lines)
+    └── users-pagination.spec.ts  # Playwright: pagination, page size selector, page numbers (289 lines)
 ```
 
 ### Authentication flow
@@ -382,7 +397,7 @@ src/
 | URL | Page | Auth | Description |
 |-----|------|------|-------------|
 | `/` | Dashboard home | Required | Stats cards (total users, active sessions, roles, uptime) |
-| `/users` | Users table | Required | List/search users, paginate, delete with confirmation |
+| `/users` | Users table | Required | List/search users with TanStack Table, status/email filter tabs, paginate, delete, restore, change password, edit |
 | `/login` | Login form | Public | Email + password login with zod validation |
 
 Additional routes planned in sidebar but not yet implemented:
@@ -393,8 +408,8 @@ Additional routes planned in sidebar but not yet implemented:
 
 - **Unit tests**: Vitest + jsdom environment. Auth and users API clients tested with MSW-mocked HTTP.
   15 tests total: 10 for auth (token helpers, login, logout), 5 for users (fetchUsers, deleteUser).
-- **E2E tests**: Playwright with two webServers (back + front). Tests login form rendering,
-  validation, and the full login→dashboard→logout flow.
+- **E2E tests**: Playwright with two webServers (back + front). Tests login → dashboard → logout flow,
+  user CRUD (edit, delete, restore), status/email filters, and pagination. 6 spec files, ~596 lines total.
 - **Coverage**: Only `lib/` is covered (~78%). Pages, components, hooks, and providers are at 0%.
 
 ### Tech notes
@@ -408,6 +423,38 @@ Additional routes planned in sidebar but not yet implemented:
 - `NEXT_PUBLIC_API_URL` defaults to `http://localhost:8080`.
 - Root route `/` is served by `(dashboard)/page.tsx` — the `(dashboard)` route group is transparent to URL.
 - Root `app/page.tsx` does not exist; all routes live either in `(dashboard)` or `/login`.
+- `@tanstack/react-table` v8.21.3 is used for table rendering (`useReactTable`, `flexRender`, `ColumnDef`).
+  Type extensions for `ColumnMeta.className` are declared in `src/types/tanstack-table.d.ts`.
+
+### AI Skills for shadcn/ui
+
+The project has the [shadcn/ui skill](https://ui.shadcn.com/docs/skills) installed globally via [skills.sh](https://skills.sh):
+
+```bash
+npx skills add shadcn/ui     # installed → ~/.agents/skills/shadcn/
+```
+
+The skill provides AI assistants with:
+- **Project context** — runs `npx shadcn@latest info --json` to read `components.json` (framework, aliases, installed components, icon library, base library)
+- **CLI command reference** — `init`, `add`, `search`, `view`, `docs`, `diff`, `info`, `build`, presets, templates
+- **Theming & customization** — CSS variables, OKLCH colors, dark mode, Tailwind v4 semantics
+- **Registry authoring** — `registry.json` format, item types, dependencies, community registries
+- **MCP Server** — search, browse, and install components from registries
+
+To refresh the context for any shadcn-related task:
+```bash
+npx shadcn@latest info --json     # project config + installed components
+npx shadcn@latest docs <component> # get docs + example URLs
+npx shadcn@latest search -q "query" # search registries
+```
+
+Key rules enforced by the skill:
+- Use `FieldGroup` + `Field` for forms (not raw `div` + `Label`)
+- Use `gap-*` instead of `space-x-*`/`space-y-*`
+- Use `size-*` for equal width/height
+- Use semantic colors (`bg-primary`, `text-muted-foreground`) never raw Tailwind values
+- shadcn v4 uses Base UI `render` prop (not Radix `asChild`)
+- `TabsTrigger` must be inside `TabsList`
 
 ## 7. Gotchas
 
@@ -434,7 +481,7 @@ Additional routes planned in sidebar but not yet implemented:
   submodule workflow, IDE setup (GoLand for back/, PhpStorm for front/), and a
   worked example of changing .gitignore across clones.
 - **Orchestrator-level Makefile** with targets: check-postgres, run-back, run-front,
-  dev, dev-bg, stop, open, test-back, test-back-cover, test-front, test-front-e2e, test.
+  kill-back, kill-front, dev, dev-bg, stop, open, test-back, test-back-cover, test-front, test-front-e2e, test.
   PostgreSQL is managed via `systemctl start postgresql` (not pg_ctlcluster).
 - **v1 routes are split** — "public" (Welcome, Health, Login) and "protected"
   (everything under `:authMiddleware`). Login additionally has rate limiting middleware.
@@ -450,7 +497,10 @@ Additional routes planned in sidebar but not yet implemented:
   in scripts, not `. nvm.sh` (dash returns exit 3 silently).
 - **Frontend: shadcn v4** components use Base UI `render` prop, not Radix `asChild`.
   `DropdownMenuLabel` must be inside `DropdownMenuGroup`.
-- **Frontend: Playwright webServer** uses `make -C .. run-back` and `make -C .. run-front` from the orchestrator root (these Makefile targets must exist).
+- **Frontend: Playwright webServer** uses `BACK_CONFIG=configs/e2e/config.yaml make -C .. run-back` to start the backend with rate limiting disabled. The e2e config at `back/configs/e2e/config.yaml` has `rate_limit.enabled: false` to avoid blocking login attempts during tests. Never rely on the local/dev config for E2E — rate limiting will lock out test logins.
+- **E2E user password:** The seeded user `nobuenhombre@yandex.ru` may have a different password from the seed migration (e.g. changed to `654321`). Check the current password with `psql -c "SELECT password FROM users WHERE email='nobuenhombre@yandex.ru'"` before writing E2E tests.
+- **`BACK_CONFIG` overridable:** The orchestrator Makefile supports `BACK_CONFIG` env variable (default: `configs/local/config.yaml`). Use `make BACK_CONFIG=configs/e2e/config.yaml run-back` to run the backend with a different config.
+- **`make kill-back` / `make kill-front`:** New Makefile targets that kill processes by PID file AND port (via `fuser -k PORT/tcp`), then wait up to 10 seconds for port release. Used internally by `dev-bg` and `stop`.
 
 ## 8. Commands
 
@@ -465,9 +515,12 @@ Additional routes planned in sidebar but not yet implemented:
 | Status of submodules | `git submodule status` |
 | Check postgres | `make check-postgres` |
 | Backend dev server | `cd back && go run ./src/cmd/goxus/... -runtype=service -config=configs/local/config.yaml` |
+| Override backend config | `cd back && go run ./src/cmd/goxus/... -runtype=service -config=$(BACK_CONFIG)` or `make BACK_CONFIG=configs/e2e/config.yaml run-back` |
 | Frontend dev server | `cd front && nvm use && npm run dev` |
 | Dev (bg, all services) | `make dev-bg` or `make dev` (opens browser) |
 | Stop bg services | `make stop` |
+| Kill backend (force) | `make kill-back` |
+| Kill frontend (force) | `make kill-front` |
 | Backend Wire gen | `cd back && make wire` |
 | Backend tests | `cd back && go test ./... -count=1` |
 | Backend test (with coverage) | `cd back && go test ./... -count=1 -coverprofile=c.out && go tool cover -func=c.out` |
@@ -481,3 +534,7 @@ Additional routes planned in sidebar but not yet implemented:
 | Migrate down | `cd back && ./src/scripts/xo/goxus/migrate-down.sh` |
 | Migrate new | `cd back && ./src/scripts/xo/goxus/migrate-new.sh` |
 | DB codegen (xo) | `cd back && ./src/scripts/xo/xo.sh goxus/xo.yaml` |
+| shadcn project info | `cd front && npx shadcn@latest info --json` |
+| shadcn component docs | `cd front && npx shadcn@latest docs <component>` |
+| shadcn search registries | `cd front && npx shadcn@latest search -q \"<query>\"` |
+| shadcn add component | `cd front && npx shadcn@latest add <component>` |
