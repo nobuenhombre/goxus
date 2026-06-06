@@ -105,13 +105,14 @@ git commit -m "chore(back): update to latest"
 | Backend auth | Token-based (users_tokens table, Bearer header) |
 | Backend RBAC | Custom service (roles, permissions, decorator pattern) |
 | Backend tests | testcontainers (PostgreSQL) + custom postgres helper |
-| Backend test coverage | **17.2%** total — `domain/user` 86.0%, `rbac` 83.1%, `ratelimit` 76.6%, `config` 41.4% |
+| Backend test coverage | **13.3%** total — `domain/user` 86.6%, `rbac` 97.3%, `ratelimit` 76.6%, `config` 41.4% |
 | Backend license | Apache 2.0 |
+| Backend LOC | 13,376 lines of Go (78 .go files, 8 test files) |
 | Frontend framework | Next.js 16.2.6 (App Router) |
 | Frontend language | TypeScript |
 | Frontend runtime | React 19.2.4 + React Compiler |
 | Frontend styling | Tailwind CSS v4 (`@theme` inline, CSS variables) |
-| Frontend UI library | shadcn/ui v4 (base-nova style, 22 components) |
+| Frontend UI library | shadcn/ui v4 (base-nova style, 27 components) |
 | Frontend form handling | react-hook-form + zod v4 |
 | Frontend package manager | npm |
 | Frontend icons | lucide-react |
@@ -121,8 +122,9 @@ git commit -m "chore(back): update to latest"
 | Frontend tests | Vitest v4.1.8 + v8 coverage |
 | Frontend API mocking | MSW v2.14.6 |
 | Frontend E2E | Playwright v1.60.0 |
-| Frontend test coverage | **13.06%** total (statements) — `lib/` 78.2%, pages/UI 0% |
+| Frontend test coverage | **7.35%** total (statements) — `lib/` 43.87%, pages/UI 0% |
 | Frontend license | Apache 2.0 |
+| Frontend LOC | 6,648 lines of TS/TSX (55 files, 8 E2E specs) |
 | Node.js version | v24.16.0 (managed via nvm, `lts/*` in `.nvmrc`) |
 
 ## 5. Backend Architecture (back/)
@@ -284,12 +286,12 @@ skill for the full rule, motivation, code review checklist, and refactoring exam
 
 ### Test coverage
 
-**Backend (Go):** 17.2% total (statements).
+**Backend (Go):** 13.3% total (statements).
 
 | Package | Coverage | Notes |
 |---------|----------|-------|
-| `domain/user` (impl + authorized) | **86.0%** | Core business logic — auth, CRUD, role management, token cleanup |
-| `pkg/services/rbac` | **83.1%** | Full CRUD for roles, permissions, assignments |
+| `domain/user` (impl + authorized) | **86.6%** | Core business logic — auth, CRUD, role management, token cleanup |
+| `pkg/services/rbac` | **97.3%** | Full CRUD for roles, permissions, assignments |
 | `pkg/services/ratelimit` | **76.6%** | In-memory sliding window rate limiter |
 | `config` | **41.4%** | Load/save YAML config |
 | `pkg/tests/postgres` | 0.0% | Test helper only (no production code) |
@@ -297,20 +299,22 @@ skill for the full rule, motivation, code review checklist, and refactoring exam
 | `api/server/**` | 0.0% | HTTP handlers, middlewares, router — untested |
 | `cmd/goxus` | 0.0% | Entrypoint, Wire gen |
 | `cron-job`, `log`, `hash`, `cli`, `ratelimit/provider`, `version` | 0.0% | Infrastructure packages |
-| **Total** | **17.2%** | |
+| **Total** | **13.3%** | 13,376 LOC, 78 .go files, 8 test files |
 
-**Frontend (TypeScript):** 13.06% statements (13.72% branches, 7.14% functions, 13.4% lines).
+**Frontend (TypeScript):** 7.35% statements (7.52% branches, 4.21% functions, 7.49% lines).
 
 | Package | Coverage | Notes |
 |---------|----------|-------|
-| `lib/` total | **78.2%** | API client layer (api.ts, auth.ts, users.ts, date.ts, utils.ts) |
+| `lib/` total | **43.87%** | API client layer (api.ts, auth.ts, users.ts, role.ts, permission.ts, date.ts, utils.ts) |
 | `lib/api.ts` | **100%** | Shared API fetch helpers (apiFetch, apiFetchJSON, ApiResponseError) |
 | `lib/auth.ts` | **77.5%** | Login/logout, token helpers |
-| `lib/users.ts` | **62.5%** | User CRUD API client |
+| `lib/users.ts` | **34.69%** | User CRUD API client |
+| `lib/role.ts` | 0.0% | Role management API client (new — untested) |
+| `lib/permission.ts` | 0.0% | Permission constants (constants only) |
 | `lib/date.ts` | 0.0% | Date formatting utility (no logic to test) |
 | `lib/utils.ts` | 0.0% | cn() utility (no logic to test) |
 | Pages, components, hooks, providers | 0.0% | No component tests yet |
-| **Total** | **13.06%** | |
+| **Total** | **7.35%** | 6,648 LOC, 55 files, 8 E2E specs |
 
 ### Test infrastructure
 
@@ -334,10 +338,11 @@ src/
 │   ├── (dashboard)/              # Route group — authenticated admin shell
 │   │   ├── layout.tsx            #   Dashboard layout (SidebarProvider, auth guard)
 │   │   ├── page.tsx              #   Dashboard home (stats cards: users, sessions, roles, uptime)
-|   │   └── users/
-|   │       ├── page.tsx              #   Users CRUD table (TanStack Table, filters, pagination, delete, restore, change password)
-|   │       ├── users-action-dialog.tsx #   Create/Edit user dialog (react-hook-form + zod)
-|   │       └── change-password-dialog.tsx # Change password dialog
+│   │   └── users/
+│   │       ├── page.tsx              #   Users CRUD table (TanStack Table, filters, pagination, delete, restore, change password, roles badge)
+│   │       ├── users-action-dialog.tsx #   Create/Edit user dialog (react-hook-form + zod)
+│   │       ├── change-password-dialog.tsx # Change password dialog
+│   │       └── roles-dialog.tsx     #   Roles management dialog (assign/revoke roles via checkboxes)
 │   └── login/
 │       └── page.tsx              # Login form (zod validation, react-hook-form)
 ├── components/                   # App components and shadcn/ui registry
@@ -360,11 +365,13 @@ src/
 │   ├── auth.ts                   # Auth API client (login, logout, token CRUD, isAuthenticated)
 │   ├── date.ts                   # formatDate() date formatting utility
 │   ├── users.ts                  # User CRUD API client (fetchUsers, createUser, updateUser, deleteUser, restoreUser, changeUserPassword)
+│   ├── role.ts                   # Role management API client (fetchAllRoles, fetchUserRoles, assignUserRole, revokeUserRole)
+│   ├── permission.ts             # Permission slug constants
 │   ├── utils.ts                  # cn() helper (clsx + tailwind-merge)
 │   └── __tests__/
 │       ├── setup.ts              # Vitest + MSW lifecycle (beforeAll/afterEach/afterAll)
 │       ├── auth.test.ts           # 10 tests: token helpers + login + logout (MSW-mocked)
-│       ├── users.test.ts         # 5 tests: fetchUsers (auth, success, 401) + deleteUser
+│       ├── users.test.ts         # 6 tests: fetchUsers (auth, success, 401) + deleteUser
 │       └── mocks/
 │           ├── handlers.ts       # MSW handlers for auth/login, /user/logout, /entity/user/, /entity/user/:id/restore
 │           └── server.ts         # MSW server setup
@@ -372,13 +379,15 @@ src/
 │   └── theme-provider.tsx        # next-themes wrapper (supports light/dark/system, localStorage)
 ├── types/
 │   └── tanstack-table.d.ts       # TanStack Table ColumnMeta extension (className)
-└── e2e/
-    ├── auth.spec.ts              # Playwright: login form, validation, login→dashboard→logout flow
-    ├── users-delete.spec.ts      # Playwright: user delete flow (71 lines)
-    ├── users-edit.spec.ts        # Playwright: user edit flow (51 lines)
-    ├── users-filters-email-verified.spec.ts  # Playwright: email verification filters (65 lines)
-    ├── users-filters-soft-deleted.spec.ts    # Playwright: soft-deleted status filters (120 lines)
-    └── users-pagination.spec.ts  # Playwright: pagination, page size selector, page numbers (289 lines)
+├── e2e/
+│   ├── auth.spec.ts              # Playwright: login form, validation, login→dashboard→logout flow
+│   ├── nav-links-users-filters.spec.ts  # Playwright: sidebar/header nav links preserve filter params (145 lines)
+│   ├── users-delete.spec.ts      # Playwright: user soft delete flow with filter=all (74 lines)
+│   ├── users-edit.spec.ts        # Playwright: user edit form data on multiple opens (90 lines)
+│   ├── users-filters-email-verified.spec.ts  # Playwright: email verification filters (96 lines)
+│   ├── users-filters-soft-deleted.spec.ts    # Playwright: soft-deleted status filters (120 lines)
+│   ├── users-pagination.spec.ts  # Playwright: pagination, page size selector, page numbers (350 lines)
+│   └── users-role-filter.spec.ts # Playwright: role filter via combobox (58 lines)
 ```
 
 ### Authentication flow
@@ -407,10 +416,11 @@ Additional routes planned in sidebar but not yet implemented:
 ### Testing
 
 - **Unit tests**: Vitest + jsdom environment. Auth and users API clients tested with MSW-mocked HTTP.
-  15 tests total: 10 for auth (token helpers, login, logout), 5 for users (fetchUsers, deleteUser).
+  16 tests total: 10 for auth (token helpers, login, logout), 6 for users (fetchUsers, deleteUser).
 - **E2E tests**: Playwright with two webServers (back + front). Tests login → dashboard → logout flow,
-  user CRUD (edit, delete, restore), status/email filters, and pagination. 6 spec files, ~596 lines total.
-- **Coverage**: Only `lib/` is covered (~78%). Pages, components, hooks, and providers are at 0%.
+  user CRUD (edit, delete, restore), status/email/role filters, pagination, and nav link persistence. 8 spec files, ~979 lines total.
+- **Coverage**: Only `lib/` is covered (~44%). Pages, components, hooks, and providers are at 0%.
+  New files `role.ts` and `permission.ts` are untested.
 
 ### Tech notes
 
@@ -493,8 +503,9 @@ Key rules enforced by the skill:
   `DeleteExpiredTokens` bypasses RBAC (internal cron job).
 - **Frontend: no root page.tsx** — the `(dashboard)` route group handles `/`.
   The root layout wraps both dashboard and login with ThemeProvider + Toaster.
-- **Frontend: nvm wrapper** — use `bash -c 'source $(HOME)/.nvm/nvm.sh && nvm use && CMD'`
-  in scripts, not `. nvm.sh` (dash returns exit 3 silently).
+- **Frontend: nvm wrapper** — use `source /home/bookworker06JAN1979/.nvm/nvm.sh && nvm use`
+  in scripts, not `. nvm.sh` (dash returns exit 3 silently) nor `$HOME/.nvm/nvm.sh`
+  (HOME may not be set in subshells).
 - **Frontend: shadcn v4** components use Base UI `render` prop, not Radix `asChild`.
   `DropdownMenuLabel` must be inside `DropdownMenuGroup`.
 - **Frontend: Playwright webServer** uses `BACK_CONFIG=configs/e2e/config.yaml make -C .. run-back` to start the backend with rate limiting disabled. The e2e config at `back/configs/e2e/config.yaml` has `rate_limit.enabled: false` to avoid blocking login attempts during tests. Never rely on the local/dev config for E2E — rate limiting will lock out test logins.
@@ -516,7 +527,7 @@ Key rules enforced by the skill:
 | Check postgres | `make check-postgres` |
 | Backend dev server | `cd back && go run ./src/cmd/goxus/... -runtype=service -config=configs/local/config.yaml` |
 | Override backend config | `cd back && go run ./src/cmd/goxus/... -runtype=service -config=$(BACK_CONFIG)` or `make BACK_CONFIG=configs/e2e/config.yaml run-back` |
-| Frontend dev server | `cd front && nvm use && npm run dev` |
+| Frontend dev server | `cd front && source /home/bookworker06JAN1979/.nvm/nvm.sh && nvm use && npm run dev` |
 | Dev (bg, all services) | `make dev-bg` or `make dev` (opens browser) |
 | Stop bg services | `make stop` |
 | Kill backend (force) | `make kill-back` |
@@ -525,16 +536,24 @@ Key rules enforced by the skill:
 | Backend tests | `cd back && go test ./... -count=1` |
 | Backend test (with coverage) | `cd back && go test ./... -count=1 -coverprofile=c.out && go tool cover -func=c.out` |
 | Backend coverage (total) | `cd back && go test ./... -count=1 -coverprofile=c.out && go tool cover -func=c.out | grep total` |
-| Frontend tests | `cd front && nvm use && npm test` |
-| Frontend tests (with coverage) | `cd front && nvm use && npm run test:coverage` |
-| Frontend tests (watch) | `cd front && nvm use && npm run test:watch` |
-| Frontend E2E tests | `cd front && nvm use && npm run test:e2e` |
-| Frontend E2E (with UI) | `cd front && nvm use && npm run test:e2e:ui` |
-| Migrate up | `cd back && ./src/scripts/xo/goxus/migrate-up.sh` |
-| Migrate down | `cd back && ./src/scripts/xo/goxus/migrate-down.sh` |
-| Migrate new | `cd back && ./src/scripts/xo/goxus/migrate-new.sh` |
+| Frontend tests | `cd front && source /home/bookworker06JAN1979/.nvm/nvm.sh && nvm use && npm test` |
+| Frontend tests (with coverage) | `cd front && source /home/bookworker06JAN1979/.nvm/nvm.sh && nvm use && npm run test:coverage` |
+| Frontend tests (watch) | `cd front && source /home/bookworker06JAN1979/.nvm/nvm.sh && nvm use && npm run test:watch` |
+| Frontend E2E tests | `cd front && source /home/bookworker06JAN1979/.nvm/nvm.sh && nvm use && npm run test:e2e` |
+| Frontend E2E single test | `cd front && source /home/bookworker06JAN1979/.nvm/nvm.sh && nvm use && npx playwright test e2e/<file>.spec.ts --reporter=line` |
+| Frontend E2E (with UI) | `cd front && source /home/bookworker06JAN1979/.nvm/nvm.sh && nvm use && npm run test:e2e:ui` |
+| Migrate up | `cd back && ./src/scripts/xo/migrate-up.sh` |
+| Migrate down | `cd back && ./src/scripts/xo/migrate-down.sh` |
+| Migrate new | `cd back && ./src/scripts/xo/migrate-new.sh` |
 | DB codegen (xo) | `cd back && ./src/scripts/xo/xo.sh goxus/xo.yaml` |
 | shadcn project info | `cd front && npx shadcn@latest info --json` |
 | shadcn component docs | `cd front && npx shadcn@latest docs <component>` |
 | shadcn search registries | `cd front && npx shadcn@latest search -q \"<query>\"` |
 | shadcn add component | `cd front && npx shadcn@latest add <component>` |
+
+## 9. Skills
+
+| Skills | Description |
+|-------|-------------|
+| [`e2e-write-then-test`](../.hermes/skills/custom/e2e-write-then-test/SKILL.md) | Write E2E test, run it, and only report success if it passes. Never announce a feature as done without a passing E2E test. |
+| [`nextjs-turbopack-workspace-root`](/home/bookworker06JAN1979/Sources/hermes-skills/nodejs/nextjs-turbopack-workspace-root/SKILL.md) | Fix Next.js Turbopack workspace root warning — use `pnpm-workspace.yaml` marker instead of `turbopack.root` (which breaks the dev server). |

@@ -153,11 +153,16 @@ test-back-cover:
 
 test-front:
 	@echo "Запуск Vitest-тестов (front)..."
-	cd $(FRONT_DIR) && . $(HOME)/.nvm/nvm.sh && nvm use && npm test
+	cd $(FRONT_DIR) && bash -c 'source $(HOME)/.nvm/nvm.sh && nvm use && npm test'
 
 test-front-e2e:
+	@echo "Остановка backend и frontend (если работают)..."
+	@$(MAKE) kill-back kill-front
+	@echo "Сброс goxus_e2e БД..."
+	$(MAKE) -C $(BACK_DIR)/src/scripts/xo/goxus reset-e2e
+	@sleep 2
 	@echo "Запуск Playwright E2E (front)..."
-	cd $(FRONT_DIR) && . $(HOME)/.nvm/nvm.sh && nvm use && npm run test:e2e
+	cd $(FRONT_DIR) && bash -c 'source $(HOME)/.nvm/nvm.sh && nvm use && NEXT_PUBLIC_API_URL=http://localhost:8081 npm run test:e2e'
 
 test: test-back test-front test-front-e2e
 	@echo "Все тесты пройдены."
