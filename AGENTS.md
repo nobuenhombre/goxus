@@ -95,6 +95,7 @@ git commit -m "chore(back): update to latest"
 | Orchestrator | git submodules, root `.gitmodules`, project-level Makefile |
 | Backend language | Go 1.26.1 |
 | Backend framework | Gin v1.12.0 |
+| Backend avatar support | File-system based (user avatars, E2E test images) |
 | Backend DI | Google Wire v0.7.0 |
 | Backend database | PostgreSQL |
 | Backend ORM / codegen | xo (type-safe Go codegen from SQL) |
@@ -105,9 +106,9 @@ git commit -m "chore(back): update to latest"
 | Backend auth | Token-based (users_tokens table, Bearer header) |
 | Backend RBAC | Custom service (roles, permissions, decorator pattern) |
 | Backend tests | testcontainers (PostgreSQL) + custom postgres helper |
-| Backend test coverage | **13.3%** total — `domain/user` 86.6%, `rbac` 97.3%, `ratelimit` 76.6%, `config` 41.4% |
+| Backend test coverage | **11.9%** total — `domain/settings` ~77%, `domain/user` 86.6%, `rbac` 97.3%, `ratelimit` 76.6%, `config` 96.8% |
 | Backend license | Apache 2.0 |
-| Backend LOC | 13,376 lines of Go (78 .go files, 8 test files) |
+| Backend LOC | 17,512 lines of Go (97 .go files, 11 test files) |
 | Frontend framework | Next.js 16.2.6 (App Router) |
 | Frontend language | TypeScript |
 | Frontend runtime | React 19.2.4 + React Compiler |
@@ -121,10 +122,10 @@ git commit -m "chore(back): update to latest"
 | Frontend AI skills | shadcn/ui skill installed via [skills.sh](https://skills.sh) → `~/.agents/skills/shadcn/` |
 | Frontend tests | Vitest v4.1.8 + v8 coverage |
 | Frontend API mocking | MSW v2.14.6 |
-| Frontend E2E | Playwright v1.60.0 |
-| Frontend test coverage | **7.35%** total (statements) — `lib/` 43.87%, pages/UI 0% |
+| Frontend E2E | Playwright v1.60.0 — 12 spec files |
+| Frontend test coverage | **5.46%** total (statements) — `lib/` 33.17%, pages/UI 0% |
 | Frontend license | Apache 2.0 |
-| Frontend LOC | 6,648 lines of TS/TSX (55 files, 8 E2E specs) |
+| Frontend LOC | 8,230 lines of TS/TSX (62 files, 12 E2E specs) |
 | Node.js version | v24.16.0 (managed via nvm, `lts/*` in `.nvmrc`) |
 
 ## 5. Backend Architecture (back/)
@@ -136,13 +137,14 @@ src/
     cli/                        # CLI flags (suikat/pkg/clivar)
     config/                     # YAML config (load/save via yaml.v3)
     domain/                     # Business logic orchestrator
-      user/                     #   User domain (CRUD, auth, roles, token cleanup)
+      user/                     #   User domain (CRUD, auth, roles, token cleanup, avatar)
+      settings/                 #   Settings domain (settings definitions, user settings CRUD)
     log/                        # Log file management
     version/                    # Version constant (v0.1.0, set via ldflags-compatible)
     api/server/                 # Gin HTTP server
       router/                   #   Base routes (unversioned /health)
         v1/                     #   v1 API routes
-          handlers/             #     Welcome, Health, Auth, User CRUD, change password
+          handlers/             #     Welcome, Health, Auth, User CRUD, change password, Settings, Avatar
           middlewares/          #     CORS, API logger, Auth token, Rate limiter
     cron-job/                   # Cron scheduler
       jobs/example/             #   Example cron job (every 10 min)
@@ -178,6 +180,12 @@ src/
 | GET | `/api/v1/entity/user/:id/roles` | Bearer | No | Get user roles |
 | POST | `/api/v1/entity/user/:id/roles` | Bearer | No | Assign role to user |
 | DELETE | `/api/v1/entity/user/:id/roles/:slug` | Bearer | No | Revoke role from user |
+| GET | `/api/v1/entity/user/:id/avatar` | Bearer | No | Get user avatar file |
+| POST | `/api/v1/entity/user/:id/avatar` | Bearer | No | Upload user avatar (multipart, max 2MB, 200x200) |
+| DELETE | `/api/v1/entity/user/:id/avatar` | Bearer | No | Delete user avatar |
+| GET | `/api/v1/settings/definitions` | Bearer | No | Get settings definitions (groups, types, settings) |
+| GET | `/api/v1/settings/user` | Bearer | No | Get current user's settings |
+| PUT | `/api/v1/settings/user` | Bearer | No | Upsert a single user setting |
 
 Auth middleware validates Bearer token from `users_tokens` table, checks
 `deleted_at` is null on both token and user, updates `last_used_at`.
@@ -187,7 +195,7 @@ Returns HTTP 429 with `Retry-After` header when limit is exceeded.
 
 ### Database schema
 
-7 migrations applied:
+16 migrations applied:
 
 | # | File | Description |
 |---|------|-------------|
@@ -198,6 +206,15 @@ Returns HTTP 429 with `Retry-After` header when limit is exceeded.
 | 000005 | `seed_user_role_permissions` | Seed 3 more permissions (user_role_add, user_role_view, user_role_delete) + link to admin |
 | 000006 | `create_users_tokens_table` | users_tokens table (token, user_id FK, last_used_at, soft delete, expires_at) |
 | 000007 | `create_users_email_partial_unique_index` | Partial unique index on `users(email)` WHERE deleted_at IS NULL |
+| 000008 | `create_user_with_roles_view` | View joining users + roles for efficient listing |
+| 000009 | `seed_data_rbac_roles` | Seed additional RBAC roles data |
+| 000010 | `create_settings_types_table` | settings_types table (id, name) |
+| 000011 | `create_settings_groups_table` | settings_groups table (id, name, slug, description, sort_order) |
+| 000012 | `create_settings_table` | settings table (id, group_id FK, type_id FK, key, label, description, default_value, sort_order, validation_rules JSON) |
+| 000013 | `create_users_settings_table` | users_settings table (id, user_id FK, setting_id FK, value, updated_at) |
+| 000014 | `users_settings_user_id_setting_id_index` | Unique composite index on users_settings(user_id, setting_id) |
+| 000015 | `seed_additional_settings` | Seed 47 settings across groups (general, security, notifications, privacy, accessibility, localization) |
+| 000016 | `seed_accessibility_group` | Seed accessibility group + additional settings |
 
 ### User Domain Service
 
@@ -286,11 +303,12 @@ skill for the full rule, motivation, code review checklist, and refactoring exam
 
 ### Test coverage
 
-**Backend (Go):** 13.3% total (statements).
+**Backend (Go):** 11.9% total (statements).
 
 | Package | Coverage | Notes |
 |---------|----------|-------|
-| `domain/user` (impl + authorized) | **86.6%** | Core business logic — auth, CRUD, role management, token cleanup |
+| `domain/user` (impl + authorized) | **86.6%** | Core business logic — auth, CRUD, role management, token cleanup, avatar (untested) |
+| `domain/settings` (impl) | **~77%** | New — settings definitions, user settings CRUD (provider 0%) |
 | `pkg/services/rbac` | **97.3%** | Full CRUD for roles, permissions, assignments |
 | `pkg/services/ratelimit` | **76.6%** | In-memory sliding window rate limiter |
 | `config` | **96.8%** | Load/save YAML config, SetDefaults |
@@ -299,22 +317,23 @@ skill for the full rule, motivation, code review checklist, and refactoring exam
 | `api/server/**` | 0.0% | HTTP handlers, middlewares, router — untested |
 | `cmd/goxus` | 0.0% | Entrypoint, Wire gen |
 | `cron-job`, `log`, `hash`, `cli`, `ratelimit/provider`, `version` | 0.0% | Infrastructure packages |
-| **Total** | **13.3%** | 13,376 LOC, 78 .go files, 8 test files |
+| **Total** | **11.9%** | 17,512 LOC, 97 .go files, 11 test files |
 
-**Frontend (TypeScript):** 7.35% statements (7.52% branches, 4.21% functions, 7.49% lines).
+**Frontend (TypeScript):** 5.46% statements (5.25% branches, 3.31% functions, 5.59% lines).
 
 | Package | Coverage | Notes |
 |---------|----------|-------|
-| `lib/` total | **43.87%** | API client layer (api.ts, auth.ts, users.ts, role.ts, permission.ts, date.ts, utils.ts) |
+| `lib/` total | **33.17%** | API client layer (api.ts, auth.ts, users.ts, role.ts, permission.ts, date.ts, utils.ts, settings.ts) |
 | `lib/api.ts` | **100%** | Shared API fetch helpers (apiFetch, apiFetchJSON, ApiResponseError) |
-| `lib/auth.ts` | **77.5%** | Login/logout, token helpers |
-| `lib/users.ts` | **34.69%** | User CRUD API client |
-| `lib/role.ts` | 0.0% | Role management API client (new — untested) |
+| `lib/auth.ts` | **70.21%** | Login/logout, token helpers |
+| `lib/users.ts` | **23.68%** | User CRUD API client |
+| `lib/settings.ts` | 0.0% | Settings API client (new — untested) |
+| `lib/role.ts` | 0.0% | Role management API client (untested) |
 | `lib/permission.ts` | 0.0% | Permission constants (constants only) |
 | `lib/date.ts` | 0.0% | Date formatting utility (no logic to test) |
 | `lib/utils.ts` | 0.0% | cn() utility (no logic to test) |
 | Pages, components, hooks, providers | 0.0% | No component tests yet |
-| **Total** | **7.35%** | 6,648 LOC, 55 files, 8 E2E specs |
+| **Total** | **5.46%** | 8,230 LOC, 62 files, 12 E2E specs |
 
 ### Test infrastructure
 
@@ -335,10 +354,12 @@ src/
 ├── app/                          # Next.js App Router — file-based routing
 │   ├── layout.tsx                # Root layout (Geist fonts, ThemeProvider, Toaster)
 │   ├── globals.css               # Tailwind v4 + shadcn CSS variables + dark mode
-│   ├── (dashboard)/              # Route group — authenticated admin shell
-│   │   ├── layout.tsx            #   Dashboard layout (SidebarProvider, auth guard)
-│   │   ├── page.tsx              #   Dashboard home (stats cards: users, sessions, roles, uptime)
-│   │   └── users/
+|   └── (dashboard)/              # Route group — authenticated admin shell
+|   │   ├── layout.tsx            #   Dashboard layout (SidebarProvider, auth guard)
+|   │   ├── page.tsx              #   Dashboard home (stats cards: users, sessions, roles, uptime)
+|   │   ├── settings/
+|   │   │   └── page.tsx          #   Settings page (groups, sections, combobox/switch/slider/radio inputs)
+|   │   └── users/
 │   │       ├── page.tsx              #   Users CRUD table (TanStack Table, filters, pagination, delete, restore, change password, roles badge)
 │   │       ├── users-action-dialog.tsx #   Create/Edit user dialog (react-hook-form + zod)
 │   │       ├── change-password-dialog.tsx # Change password dialog
@@ -348,14 +369,17 @@ src/
 ├── components/                   # App components and shadcn/ui registry
 │   ├── app-header.tsx            # Header: sidebar trigger, nav, search, theme toggle, user
 │   ├── app-sidebar.tsx           # Sidebar: team switcher, nav groups, user profile, logout
+│   ├── avatar-upload-dropzone.tsx # Drag-and-drop avatar upload with preview
 │   ├── data-table/               # Reusable data table with pagination
 │   │   ├── index.ts              #   Re-export
 │   │   └── pagination.tsx        #   Pagination widget (page numbers with ellipsis, page size selector)
-│   └── ui/                       # shadcn/ui v4 components (base-nova style, 27 components)
+│   ├── settings-sidebar-nav.tsx  # Settings sidebar navigation (groups, sections)
+│   └── ui/                       # shadcn/ui v4 components (base-nova style, 29 components)
 │       ├── avatar.tsx, badge.tsx, button.tsx, card.tsx, checkbox.tsx, collapsible.tsx
 │       ├── combobox.tsx, command.tsx, dialog.tsx, dropdown-menu.tsx, form.tsx, input.tsx
-│       ├── input-group.tsx, item.tsx, label.tsx, popover.tsx, scroll-area.tsx, select.tsx
-│       ├── separator.tsx, sheet.tsx, sidebar.tsx, skeleton.tsx, sonner.tsx, table.tsx
+│       ├── input-group.tsx, item.tsx, label.tsx, popover.tsx, radio-group.tsx
+│       ├── scroll-area.tsx, select.tsx, separator.tsx, sheet.tsx, sidebar.tsx
+│       ├── skeleton.tsx, slider.tsx, sonner.tsx, switch.tsx, table.tsx
 │       ├── tabs.tsx, textarea.tsx, tooltip.tsx
 ├── hooks/
 │   ├── use-local-storage.ts      # useSyncExternalStore-based localStorage hook
@@ -367,6 +391,7 @@ src/
 │   ├── users.ts                  # User CRUD API client (fetchUsers, createUser, updateUser, deleteUser, restoreUser, changeUserPassword)
 │   ├── role.ts                   # Role management API client (fetchAllRoles, fetchUserRoles, assignUserRole, revokeUserRole)
 │   ├── permission.ts             # Permission slug constants
+│   ├── settings.ts               # Settings API client (fetchSettingsDefinitions, fetchUserSettings, upsertUserSetting)
 │   ├── utils.ts                  # cn() helper (clsx + tailwind-merge)
 │   └── __tests__/
 │       ├── setup.ts              # Vitest + MSW lifecycle (beforeAll/afterEach/afterAll)
@@ -381,7 +406,10 @@ src/
 │   └── tanstack-table.d.ts       # TanStack Table ColumnMeta extension (className)
 ├── e2e/
 │   ├── auth.spec.ts              # Playwright: login form, validation, login→dashboard→logout flow
+│   ├── avatar-sidebar-header.spec.ts  # Playwright: avatar in sidebar + header
 │   ├── nav-links-users-filters.spec.ts  # Playwright: sidebar/header nav links preserve filter params (145 lines)
+│   ├── settings.spec.ts          # Playwright: settings page rendering, interactions, persistence
+│   ├── users-avatar.spec.ts      # Playwright: user avatar upload/delete flow
 │   ├── users-delete.spec.ts      # Playwright: user soft delete flow with filter=all (74 lines)
 │   ├── users-edit.spec.ts        # Playwright: user edit form data on multiple opens (90 lines)
 │   ├── users-filters-email-verified.spec.ts  # Playwright: email verification filters (96 lines)
@@ -407,20 +435,21 @@ src/
 |-----|------|------|-------------|
 | `/` | Dashboard home | Required | Stats cards (total users, active sessions, roles, uptime) |
 | `/users` | Users table | Required | List/search users with TanStack Table, status/email filter tabs, paginate, delete, restore, change password, edit |
+| `/settings` | Settings | Required | Application settings with groups, combobox/switch/slider/radio inputs |
 | `/login` | Login form | Public | Email + password login with zod validation |
 
 Additional routes planned in sidebar but not yet implemented:
 - `/roles` — RBAC management
-- `/settings` — Application settings
 
 ### Testing
 
 - **Unit tests**: Vitest + jsdom environment. Auth and users API clients tested with MSW-mocked HTTP.
   16 tests total: 10 for auth (token helpers, login, logout), 6 for users (fetchUsers, deleteUser).
 - **E2E tests**: Playwright with two webServers (back + front). Tests login → dashboard → logout flow,
-  user CRUD (edit, delete, restore), status/email/role filters, pagination, and nav link persistence. 8 spec files, ~979 lines total.
-- **Coverage**: Only `lib/` is covered (~44%). Pages, components, hooks, and providers are at 0%.
-  New files `role.ts` and `permission.ts` are untested.
+  user CRUD (edit, delete, restore), status/email/role filters, pagination, nav link persistence, avatar,
+  and settings page. 12 spec files total.
+- **Coverage**: Only `lib/` is covered (~33%). Pages, components, hooks, and providers are at 0%.
+  New files `settings.ts` brings down the `lib/` average.
 
 ### Tech notes
 

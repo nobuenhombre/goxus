@@ -6,7 +6,7 @@
   <img src="https://img.shields.io/badge/license-Apache%202.0-blue" alt="License Apache 2.0">
 </p>
 
-**goxus** is a full-stack SaaS admin panel powered by a Go 1.26.1 backend and a Next.js 16.2.6 frontend, orchestrated from this monorepo. The backend delivers a Gin HTTP API with PostgreSQL persistence, token-based authentication (login/logout), RBAC (role-based access control), user management CRUD, rate-limited login endpoint, scheduled cron jobs, and expired token cleanup. The frontend is a TypeScript admin dashboard built with Tailwind CSS v4, React 19, shadcn/ui v4 (27 components), featuring login auth, sidebar navigation, user CRUD management, and dark/light theme switching.
+**goxus** is a full-stack SaaS admin panel powered by a Go 1.26.1 backend and a Next.js 16.2.6 frontend, orchestrated from this monorepo. The backend delivers a Gin HTTP API with PostgreSQL persistence, token-based authentication (login/logout), RBAC (role-based access control), user management CRUD, file-based user avatars, user settings management, rate-limited login endpoint, scheduled cron jobs, and expired token cleanup. The frontend is a TypeScript admin dashboard built with Tailwind CSS v4, React 19, shadcn/ui v4 (29 components), featuring login auth, sidebar navigation, user CRUD management, settings management with combobox/switch/slider/radio inputs, user avatar upload, and dark/light theme switching.
 
 ---
 
@@ -18,6 +18,8 @@ The backend features:
 - **Token authentication** — login/logout with Bearer tokens, `users_tokens` table with soft-delete and expiry
 - **Login rate limiting** — in-memory sliding-window rate limiter per client IP with HTTP 429 + Retry-After
 - **User management CRUD** — create, read, update, delete (soft), restore, and change password with RBAC permission checks
+- **User settings management** — settings definitions (groups, types), user settings CRUD, 47 seeded settings across 5 groups
+- **User avatars** — file-based avatar upload (multipart, max 2MB, 200x200), serve and delete
 - **RBAC service** — roles, permissions, user-role assignment with full CRUD
 - **Expired token cleanup** — cron job deleting tokens past TTL (default 7 days)
 - **Versioned API** — routes under `/api/v1/` with public, authenticated, and rate-limited endpoints
@@ -26,9 +28,10 @@ The backend features:
 - **golang-migrate** — database migrations with seed data
 
 The frontend features:
-- **Admin dashboard** — sidebar navigation with collapsible menu, responsive layout
+- **Admin dashboard** — sidebar navigation with collapsible menu, responsive layout, user avatar in sidebar/header
 - **Login page** — validated email/password form (zod + react-hook-form), token storage
-- **User management UI** — TanStack Table with search, status/email/role filter tabs, pagination with page size selector, create/edit dialog, roles management dialog, change password dialog, delete confirmation, restore soft-deleted users
+- **User management UI** — TanStack Table with search, status/email/role filter tabs, pagination with page size selector, create/edit dialog, roles management dialog, change password dialog, delete confirmation, restore soft-deleted users, avatar upload
+- **Settings page** — settings organized by groups and sections, combobox/switch/slider/radio inputs, persistence
 - **Dark/light theme** — next-themes provider with localStorage persistence
 - **Auth guard** — dashboard routes automatically redirect to `/login` if unauthenticated
 - **Shared API client** — `apiFetch` / `apiFetchJSON` helpers with automatic Bearer token injection
@@ -104,6 +107,8 @@ npm install
 │  │  RBAC         │            │  Sidebar + Header  │   │
 │  │  Auth (token) │            │  Login + Auth Guard│   │
 │  │  User CRUD    │            │  Users CRUD Table  │   │
+│  │  User Avatar  │            │  Settings Page     │   │
+│  │  Settings     │            │  User Avatar UI    │   │
 │  │  Rate limiter │            │  Theme (dark/light)│   │
 │  │  Cron Jobs    │            │  API client (lib/) │   │
 │  └──────────────┘            └───────────────────┘   │
@@ -111,8 +116,8 @@ npm install
 ```
 
 - The **orchestrator** wraps both submodules and is the entry point for scripts, CI pipelines, and deployment.
-- The **Go backend** exposes a RESTful JSON API via Gin at `/api/v1/`, connects to PostgreSQL for persistence, provides token-based auth (login/logout with Bearer tokens), user CRUD with RBAC permission checks (including soft-delete, restore, and change password), rate-limited login endpoint via sliding-window rate limiter, and runs background cron tasks including expired token cleanup.
-- The **Next.js frontend** consumes the API and renders an admin dashboard with React 19. Features include a collapsible sidebar with navigation groups, a header with search/theme toggle/user menu, a login page with zod validation, a users CRUD table with TanStack Table and client-side search/status/email/role filter tabs/pagination with page size selector, dialogs for create/edit/roles management/change password/delete confirmation, restore for soft-deleted users, filter params persistence in nav links, and a shared API client layer (`api.ts`) for Bearer token injection.
+- The **Go backend** exposes a RESTful JSON API via Gin at `/api/v1/`, connects to PostgreSQL for persistence, provides token-based auth (login/logout with Bearer tokens), user CRUD with RBAC permission checks (including soft-delete, restore, and change password), file-based user avatars, user settings management (definitions, groups, types, user settings CRUD), rate-limited login endpoint via sliding-window rate limiter, and runs background cron tasks including expired token cleanup.
+- The **Next.js frontend** consumes the API and renders an admin dashboard with React 19. Features include a collapsible sidebar with navigation groups, a header with search/theme toggle/user menu (with avatar), a login page with zod validation, a users CRUD table with TanStack Table and client-side search/status/email/role filter tabs/pagination with page size selector, dialogs for create/edit/roles management/change password/delete confirmation, restore for soft-deleted users, filter params persistence in nav links, a settings page with combobox/switch/slider/radio inputs, and a shared API client layer (`api.ts`) for Bearer token injection.
 
 ---
 
@@ -170,8 +175,8 @@ make BACK_CONFIG=configs/e2e/config.yaml run-back   # run with E2E config (rate 
 cd front
 source /home/bookworker06JAN1979/.nvm/nvm.sh && nvm use
 npm test              # Vitest unit tests (with MSW) — 16 tests
-npm run test:coverage # With coverage report (7.35% total)
-npm run test:e2e      # Playwright E2E tests — 8 spec files, ~979 lines
+npm run test:coverage # With coverage report (5.46% total)
+npm run test:e2e      # Playwright E2E tests — 12 spec files
 ```
 
 ### Backend Tests
@@ -207,13 +212,13 @@ including:
 | Background Jobs | robfig/cron v3.0.1 |
 | RBAC | Custom service (roles, permissions, decorator pattern) |
 | Test PostgreSQL | testcontainers |
-| Test coverage (Backend) | **13.3%** total — `domain/user` 86.6%, `rbac` 97.3%, `ratelimit` 76.6%, `config` 41.4% |
-| Backend LOC | 13,376 lines of Go (78 files) |
+| Test coverage (Backend) | **11.9%** total — `domain/user` 86.6%, `domain/settings` ~77%, `rbac` 97.3%, `ratelimit` 76.6%, `config` 96.8% |
+| Backend LOC | 17,512 lines of Go (97 files) |
 | Language (Frontend) | TypeScript |
 | Framework (Frontend) | Next.js 16.2.6 (App Router) |
 | Runtime (Frontend) | React 19.2.4 + React Compiler |
 | CSS | Tailwind CSS v4 (CSS variables, `@theme`) |
-| UI Components | shadcn/ui v4 (base-nova style, 27 components) |
+| UI Components | shadcn/ui v4 (base-nova style, 29 components) |
 | Form Handling | react-hook-form + zod v4 |
 | Icons | lucide-react |
 | Notifications | sonner (Toaster) |
@@ -222,8 +227,8 @@ including:
 | | Data Table | @tanstack/react-table v8.21.3 |
 | | API Mocking | MSW v2.14.6 |
 | | E2E Tests | Playwright v1.60.0 |
-| Test coverage (Frontend) | **7.35%** (statements) — `lib/` 43.87%, pages/UI 0% |
-| Frontend LOC | 6,648 lines of TS/TSX (55 files) |
+| Test coverage (Frontend) | **5.46%** (statements) — `lib/` 33.17%, pages/UI 0% |
+| Frontend LOC | 8,230 lines of TS/TSX (62 files) |
 | Package Manager (Frontend) | npm |
 | Node.js version | v24.16.0 (nvm, `lts/*` in `.nvmrc`) |
 | Orchestration | Git submodules + Makefile |
