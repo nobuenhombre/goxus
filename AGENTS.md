@@ -293,7 +293,7 @@ skill for the full rule, motivation, code review checklist, and refactoring exam
 | `domain/user` (impl + authorized) | **86.6%** | Core business logic — auth, CRUD, role management, token cleanup |
 | `pkg/services/rbac` | **97.3%** | Full CRUD for roles, permissions, assignments |
 | `pkg/services/ratelimit` | **76.6%** | In-memory sliding window rate limiter |
-| `config` | **41.4%** | Load/save YAML config |
+| `config` | **96.8%** | Load/save YAML config, SetDefaults |
 | `pkg/tests/postgres` | 0.0% | Test helper only (no production code) |
 | `db/goxus` (xo-generated) | 0.0% | Generated repos — tested via services |
 | `api/server/**` | 0.0% | HTTP handlers, middlewares, router — untested |
